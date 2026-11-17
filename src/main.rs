@@ -151,6 +151,11 @@ enum Command {
         #[command(subcommand)]
         command: PrebuildCommand,
     },
+    /// List and read the devcontainer.json templates, and open a pull request that adds one to a repository.
+    PrebuildTemplate {
+        #[command(subcommand)]
+        command: PrebuildTemplateCommand,
+    },
     /// Mint a Claude subscription token into a secret set from a short-lived box, without installing Claude Code.
     ClaudeSetup {
         #[command(subcommand)]
@@ -820,6 +825,54 @@ enum PrebuildCommand {
         /// The prebuildId tumpel prebuild list prints.
         prebuild_id: String,
     },
+    /// Show what a prebuild would run: the commands in order, containerEnv, the input digest and what a build would refuse.
+    Preview {
+        /// The GitHub repository, as `https://github.com/owner/name`.
+        #[arg(long)]
+        repository: String,
+        /// The `personaId` whose secret set's `GITHUB_TOKEN` reads the repository when the GitHub App does not cover it.
+        #[arg(long)]
+        persona_id: String,
+        /// A devcontainer.json to preview in place of the repository's own.
+        #[arg(long)]
+        config: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+enum PrebuildTemplateCommand {
+    /// List every template with its versions, newest first, and the toolchains each version pins.
+    List,
+    /// Show one template version with its devcontainer.json.
+    Get {
+        /// The template, such as `npm`, `rust` or `python`.
+        #[arg(long)]
+        template: String,
+        /// The version tumpel prebuild-template list prints.
+        #[arg(long)]
+        version: String,
+    },
+    /// Open a pull request that adds a template version's devcontainer.json to a repository.
+    OpenPullRequest {
+        /// The GitHub repository, as `https://github.com/owner/name`.
+        #[arg(long)]
+        repository: String,
+        /// The template, such as `npm`, `rust` or `python`.
+        #[arg(long)]
+        template: String,
+        /// The version tumpel prebuild-template list prints.
+        #[arg(long)]
+        version: String,
+        /// Replace the repository's devcontainer.json; without it a repository that holds one is refused.
+        #[arg(long)]
+        replace: bool,
+    },
+    /// Show the template pull request of a repository: Open, Merged or Closed.
+    GetPullRequest {
+        /// The GitHub repository, as `https://github.com/owner/name`.
+        #[arg(long)]
+        repository: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1303,6 +1356,7 @@ fn main() -> ExitCode {
             Command::Snapshot { command } => sessions::snapshot(command).await,
             Command::Metrics { command } => metrics::metrics(command).await,
             Command::Prebuild { command } => prebuilds::prebuild(command).await,
+            Command::PrebuildTemplate { command } => prebuilds::prebuild_template(command).await,
             Command::ClaudeSetup { command } => claude_setups::claude_setup(command).await,
             Command::Openrouter { command } => openrouter::openrouter(command).await,
             Command::OauthGrant { command } => connections::oauth_grant(command).await,
