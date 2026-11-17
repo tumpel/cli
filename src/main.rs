@@ -300,12 +300,12 @@ enum PersonaCommand {
         persona_id: String,
     },
     /// Replace a persona with a `PersonaUpdate` JSON file, or change the parts its flags name; --persona-file replaces the whole file set.
-    #[command(group(ArgGroup::new("change").required(true).multiple(true).args(["file", "name", "secret_set_id", "persona_file"])))]
+    #[command(group(ArgGroup::new("change").required(true).multiple(true).args(["file", "name", "secret_set_id", "persona_file", "box_memory_mib"])))]
     Update {
         /// The `personaId` that tumpel persona list prints.
         persona_id: String,
         /// The `PersonaUpdate` JSON file.
-        #[arg(long, conflicts_with_all = ["name", "secret_set_id", "persona_file"])]
+        #[arg(long, conflicts_with_all = ["name", "secret_set_id", "persona_file", "box_memory_mib"])]
         file: Option<PathBuf>,
         /// The new persona name; left out, the name stays.
         #[arg(long)]
@@ -316,6 +316,9 @@ enum PersonaCommand {
         /// A persona file as `<path in the harness home>=<local file>`; repeat it for each file. Left out, the files stay.
         #[arg(long, value_name = "PATH=LOCAL")]
         persona_file: Vec<String>,
+        /// The memory in MiB of each box the persona's sessions boot, from 4096 up to 65536; left out, the memory stays.
+        #[arg(long)]
+        box_memory_mib: Option<i32>,
     },
     /// Delete a persona.
     Delete {
@@ -388,6 +391,9 @@ struct PersonaFields {
     /// A persona file as `<path in the harness home>=<local file>`, such as `.claude/settings.json=./settings.json`; repeat it for each file.
     #[arg(long, value_name = "PATH=LOCAL")]
     persona_file: Vec<String>,
+    /// The memory in MiB of each box the persona's sessions boot, from 4096 up to 65536; left out, boxes get 4096.
+    #[arg(long)]
+    box_memory_mib: Option<i32>,
 }
 
 #[derive(Args)]

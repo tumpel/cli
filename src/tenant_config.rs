@@ -447,6 +447,7 @@ pub fn starter(live: &Live) -> Result<TenantConfig> {
                     )
                 })?;
                 Ok(ConfigPersona {
+                    box_memory_mib: persona.box_memory_mib,
                     files: persona
                         .files
                         .iter()
