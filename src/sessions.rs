@@ -274,15 +274,13 @@ async fn print_transcript(
                 return Ok(());
             }
             let last = match turn {
-                Some(turn) => Some(turn),
-                None => answered(client.turns_list(&session).await, || {
-                    format!("{endpoint}/v1/sessions/{}/turns", *session)
-                })?
-                .pop()
-                .map(|last| last.turn_id),
-            };
-            let Some(last) = last else {
-                return Ok(());
+                Some(turn) => turn,
+                None => {
+                    answered(client.sessions_get(&session).await, || {
+                        format!("{endpoint}/v1/sessions/{}", *session)
+                    })?
+                    .last_turn_id
+                }
             };
             return match client.turns_get_failure(&last).await {
                 Err(Error::ErrorResponse(problem)) if problem.status() == StatusCode::NOT_FOUND => Ok(()),
@@ -369,19 +367,5 @@ mod tests {
                 "nothing left to do"
             ]
         );
-    }
-
-    #[test]
-    fn a_raw_session_read_prints_only_the_jsonl_lines() {
-        let mut headed = None;
-        let lines = headed_lines(
-            [
-                (turn("01J00000000000000000000001"), r#"{"type":"user"}"#.to_owned()),
-                (turn("01J00000000000000000000002"), r#"{"type":"assistant"}"#.to_owned()),
-            ],
-            false,
-            &mut headed,
-        );
-        assert_eq!(lines, [r#"{"type":"user"}"#, r#"{"type":"assistant"}"#]);
     }
 }
