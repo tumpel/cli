@@ -538,7 +538,7 @@ enum TurnCommand {
         /// The prompt.
         #[arg(long)]
         prompt: String,
-        /// When the work is done: the harness keeps working until this holds, for at most 20 turns. Only a harness that tumpel harness list shows with goals true takes one, and the prompt and goal together stay within 4000 characters.
+        /// When the work is done: the harness keeps working until this holds. See tumpel harness list for which harnesses take a goal.
         #[arg(long)]
         goal: Option<String>,
     },
