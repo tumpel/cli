@@ -92,6 +92,7 @@ async fn persona_create(
         return read_json(&file.unwrap_or_default(), "PersonaCreate");
     };
     Ok(PersonaCreate {
+        box_memory_mib: fields.box_memory_mib,
         files: persona_files(client, &fields.persona_file, "tumpel persona create").await?,
         harness: harness(&fields.harness)?,
         name: parsed("--name", &fields.name)?,
@@ -99,14 +100,20 @@ async fn persona_create(
     })
 }
 
-async fn persona_update(
-    client: &Client,
-    url: &str,
-    id: &EntityId,
+struct PersonaChange {
     name: Option<String>,
     secret_set_id: Option<String>,
-    persona_file: &[String],
-) -> Result<PersonaUpdate> {
+    persona_file: Vec<String>,
+    box_memory_mib: Option<i32>,
+}
+
+async fn persona_update(client: &Client, url: &str, id: &EntityId, change: PersonaChange) -> Result<PersonaUpdate> {
+    let PersonaChange {
+        name,
+        secret_set_id,
+        persona_file,
+        box_memory_mib,
+    } = change;
     let current = answered(client.personas_get(id).await, || url.to_string())?;
     let files = if persona_file.is_empty() {
         current
@@ -123,9 +130,10 @@ async fn persona_update(
             })
             .collect()
     } else {
-        persona_files(client, persona_file, "tumpel persona update").await?
+        persona_files(client, &persona_file, "tumpel persona update").await?
     };
     Ok(PersonaUpdate {
+        box_memory_mib: box_memory_mib.or(current.box_memory_mib),
         files,
         name: name.map_or(Ok(current.name), |name| parsed("--name", &name))?,
         secret_set_id: secret_set_id.map_or(Ok(current.secret_set_id), |raw| entity_id(&raw, "secret set"))?,
@@ -226,12 +234,26 @@ pub async fn personas(command: PersonaCommand) -> Result<()> {
             name,
             secret_set_id,
             persona_file,
+            box_memory_mib,
         } => {
             let id = entity_id(&persona_id, "persona")?;
             let url = format!("{endpoint}/v1/personas/{persona_id}");
             let body = match file {
                 Some(file) => read_json(&file, "PersonaUpdate")?,
-                None => persona_update(&client, &url, &id, name, secret_set_id, &persona_file).await?,
+                None => {
+                    persona_update(
+                        &client,
+                        &url,
+                        &id,
+                        PersonaChange {
+                            name,
+                            secret_set_id,
+                            persona_file,
+                            box_memory_mib,
+                        },
+                    )
+                    .await?
+                }
             };
             print_json(&shown(client.personas_update(&id, &body).await, || url)?)
         }
