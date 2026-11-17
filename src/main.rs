@@ -476,7 +476,7 @@ enum SessionCommand {
         #[arg(long)]
         persona_id: String,
     },
-    /// Show one session with the stops of it that failed.
+    /// Show one session with the stops of it that failed, the prebuild layer its files start from or why they start without one, and the image its latest turn boots.
     Get {
         /// The sessionId tumpel session list prints.
         session_id: String,
@@ -529,7 +529,7 @@ enum TurnCommand {
         #[arg(long)]
         prompt: String,
     },
-    /// Show one turn.
+    /// Show one turn with the image its box boots.
     Get {
         /// The turnId tumpel turn list prints.
         turn_id: String,
