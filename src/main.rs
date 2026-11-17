@@ -96,17 +96,17 @@ enum Command {
         #[command(subcommand)]
         command: ConfigCommand,
     },
-    /// Start, get, list, stop or archive sessions.
+    /// Start, get, list, stop or archive sessions, and print what their turns wrote.
     Session {
         #[command(subcommand)]
         command: SessionCommand,
     },
-    /// Send, get or list a session's turns, and read why one failed.
+    /// Send, get or list a session's turns, and read why one failed; tumpel transcript read prints what a turn wrote.
     Turn {
         #[command(subcommand)]
         command: TurnCommand,
     },
-    /// Read what the harness wrote.
+    /// Read what the harness wrote in a turn.
     Transcript {
         #[command(subcommand)]
         command: TranscriptCommand,
@@ -501,6 +501,13 @@ enum SessionCommand {
         /// The sessionId tumpel session list prints.
         session_id: String,
     },
+    /// Print what the harness wrote in every turn of a session, oldest first, one JSONL line per line.
+    Transcript {
+        /// The sessionId tumpel session list prints.
+        session_id: String,
+        #[command(flatten)]
+        read: TranscriptArgs,
+    },
     /// List your sessions.
     List {
         /// Only sessions in this state: Starting, Idle, Running, Stopping, Stopped or Archived.
@@ -545,22 +552,28 @@ enum TranscriptCommand {
     Read {
         /// The turnId tumpel turn list prints.
         turn_id: String,
-        /// Keep reading until the transcript reads finished, polling with backoff.
-        #[arg(long)]
-        follow: bool,
-        /// Start after this lineSeq, the cursor of an earlier read.
-        #[arg(long, default_value_t = 0)]
-        after: i64,
-        /// The most lines to print in total; reads page by page until it has them.
-        #[arg(long)]
-        limit: Option<NonZeroU32>,
-        /// The most bytes one read returns, cut on a line boundary; 32768 when left out.
-        #[arg(long)]
-        max_bytes: Option<NonZeroU32>,
-        /// Print the assistant's text and one line per tool call, and token, cost or error reports, without tool output; only a harness that tumpel harness list shows with compactTranscript has a compact form.
-        #[arg(long)]
-        compact: bool,
+        #[command(flatten)]
+        read: TranscriptArgs,
     },
+}
+
+#[derive(Args)]
+struct TranscriptArgs {
+    /// Keep reading until the transcript reads finished, polling with backoff.
+    #[arg(long)]
+    follow: bool,
+    /// Start after this lineSeq, the cursor of an earlier read.
+    #[arg(long, default_value_t = 0)]
+    after: i64,
+    /// The most lines to print in total; reads page by page until it has them.
+    #[arg(long)]
+    limit: Option<NonZeroU32>,
+    /// The most bytes one read returns, cut on a line boundary; 32768 when left out.
+    #[arg(long)]
+    max_bytes: Option<NonZeroU32>,
+    /// Print the assistant's text and one line per tool call, and token, cost or error reports, without tool output; only a harness that tumpel harness list shows with compactTranscript has a compact form.
+    #[arg(long)]
+    compact: bool,
 }
 
 #[derive(Subcommand)]
@@ -1332,27 +1345,7 @@ fn main() -> ExitCode {
             Command::Config { command } => tenant_config(command).await,
             Command::Session { command } => sessions::session(command).await,
             Command::Turn { command } => sessions::turn(command).await,
-            Command::Transcript {
-                command:
-                    TranscriptCommand::Read {
-                        turn_id,
-                        follow,
-                        after,
-                        limit,
-                        max_bytes,
-                        compact,
-                    },
-            } => {
-                sessions::transcript(sessions::TranscriptRead {
-                    turn_id,
-                    follow,
-                    after,
-                    limit,
-                    max_bytes,
-                    compact,
-                })
-                .await
-            }
+            Command::Transcript { command } => sessions::transcript(command).await,
             Command::Snapshot { command } => sessions::snapshot(command).await,
             Command::Metrics { command } => metrics::metrics(command).await,
             Command::Prebuild { command } => prebuilds::prebuild(command).await,
