@@ -1,11 +1,14 @@
-use crate::{answered, print_json, shown, signed_in, SessionCommand, SnapshotCommand, TurnCommand};
+use crate::{
+    answered, print_json, shown, signed_in, SessionCommand, SnapshotCommand, TranscriptArgs, TranscriptCommand,
+    TurnCommand,
+};
 use anyhow::{bail, Result};
 use reqwest::StatusCode;
 use std::num::NonZeroU32;
 use std::str::FromStr;
 use std::time::Duration;
 use tumpel_api::types::{EntityId, SessionStart, SessionStartFromIssue, SessionState, TranscriptPage, TurnSend};
-use tumpel_api::Error;
+use tumpel_api::{Client, Error};
 
 const FIRST_BACKOFF: Duration = Duration::from_millis(250);
 const MAX_BACKOFF: Duration = Duration::from_secs(5);
@@ -94,6 +97,10 @@ pub async fn session(command: SessionCommand) -> Result<()> {
                 || format!("{endpoint}/v1/sessions/{session_id}/credential-handovers"),
             )?)
         }
+        SessionCommand::Transcript { session_id, read } => {
+            let session = id("sessionId", &session_id)?;
+            print_transcript(&client, &endpoint, session, None, read).await
+        }
         SessionCommand::List { state, host_id } => {
             let state = state
                 .map(|value| parsed::<SessionState>("--state", &value))
@@ -176,24 +183,41 @@ fn spend(remaining: Option<NonZeroU32>, available: usize) -> (usize, Spent) {
     (taken, NonZeroU32::new(rest).map_or(Spent::Done, Spent::Left))
 }
 
-pub struct TranscriptRead {
-    pub turn_id: String,
-    pub follow: bool,
-    pub after: i64,
-    pub limit: Option<NonZeroU32>,
-    pub max_bytes: Option<NonZeroU32>,
-    pub compact: bool,
-}
-
-pub async fn transcript(read: TranscriptRead) -> Result<()> {
+pub async fn transcript(command: TranscriptCommand) -> Result<()> {
     let (credentials, client) = signed_in()?;
     let endpoint = credentials.endpoint;
-    let turn_id = read.turn_id;
+    let TranscriptCommand::Read { turn_id, read } = command;
     let turn = id("turnId", &turn_id)?;
     let session = answered(client.turns_get(&turn).await, || {
         format!("{endpoint}/v1/turns/{turn_id}")
     })?
     .session_id;
+    print_transcript(&client, &endpoint, session, Some(turn), read).await
+}
+
+fn headed_lines(
+    texts: impl IntoIterator<Item = (EntityId, String)>,
+    compact: bool,
+    headed: &mut Option<EntityId>,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    for (turn_id, text) in texts {
+        if compact && headed.as_ref() != Some(&turn_id) {
+            lines.push(format!("turn {}", *turn_id));
+            *headed = Some(turn_id);
+        }
+        lines.push(text);
+    }
+    lines
+}
+
+async fn print_transcript(
+    client: &Client,
+    endpoint: &str,
+    session: EntityId,
+    turn: Option<EntityId>,
+    read: TranscriptArgs,
+) -> Result<()> {
     let mut cursor = read.after.into();
     let mut backoff = FIRST_BACKOFF;
     let mut remaining = read.limit;
@@ -207,7 +231,7 @@ pub async fn transcript(read: TranscriptRead) -> Result<()> {
                     Some(read.compact),
                     remaining.map(|left| left.min(PAGE_LINES)),
                     read.max_bytes,
-                    Some(&turn),
+                    turn.as_ref(),
                 )
                 .await,
             || format!("{endpoint}/v1/sessions/{}/transcript", *session),
@@ -235,12 +259,8 @@ pub async fn transcript(read: TranscriptRead) -> Result<()> {
             ),
         };
         let (printed, spent) = spend(remaining, texts.len());
-        for (turn_id, text) in texts.into_iter().take(printed) {
-            if read.compact && headed.as_ref() != Some(&turn_id) {
-                println!("turn {}", *turn_id);
-                headed = Some(turn_id);
-            }
-            println!("{text}");
+        for line in headed_lines(texts.into_iter().take(printed), read.compact, &mut headed) {
+            println!("{line}");
         }
         remaining = match spent {
             Spent::Done => return Ok(()),
@@ -253,11 +273,20 @@ pub async fn transcript(read: TranscriptRead) -> Result<()> {
             if !read.follow {
                 return Ok(());
             }
-            return match client.turns_get_failure(&turn).await {
+            let last = match turn {
+                Some(turn) => turn,
+                None => {
+                    answered(client.sessions_get(&session).await, || {
+                        format!("{endpoint}/v1/sessions/{}", *session)
+                    })?
+                    .last_turn_id
+                }
+            };
+            return match client.turns_get_failure(&last).await {
                 Err(Error::ErrorResponse(problem)) if problem.status() == StatusCode::NOT_FOUND => Ok(()),
                 outcome => {
-                    let failure = answered(outcome, || format!("{endpoint}/v1/turns/{turn_id}/failure"))?;
-                    bail!("turn {turn_id} failed with {}: {}", failure.reason, failure.detail)
+                    let failure = answered(outcome, || format!("{endpoint}/v1/turns/{}/failure", *last))?;
+                    bail!("turn {} failed with {}: {}", *last, failure.reason, failure.detail)
                 }
             };
         }
@@ -275,8 +304,9 @@ pub async fn transcript(read: TranscriptRead) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{spend, Spent};
+    use super::{headed_lines, spend, Spent};
     use std::num::NonZeroU32;
+    use tumpel_api::types::EntityId;
 
     fn lines(count: u32) -> NonZeroU32 {
         NonZeroU32::new(count).expect("a test limit is not zero")
@@ -293,5 +323,49 @@ mod tests {
     #[test]
     fn no_limit_prints_every_line_of_every_page() {
         assert_eq!(spend(None, 1000), (1000, Spent::Unlimited));
+    }
+
+    fn turn(id: &str) -> EntityId {
+        id.parse().expect("a test turn id is valid")
+    }
+
+    #[test]
+    fn a_compact_session_read_names_each_turn_once_above_its_lines_across_pages() {
+        let mut headed = None;
+        let first_page = headed_lines(
+            [
+                (turn("01J00000000000000000000001"), "read the issue".to_owned()),
+                (turn("01J00000000000000000000001"), "opened a pull request".to_owned()),
+                (turn("01J00000000000000000000002"), "fixed the review".to_owned()),
+            ],
+            true,
+            &mut headed,
+        );
+        let second_page = headed_lines(
+            [
+                (turn("01J00000000000000000000002"), "pushed the fix".to_owned()),
+                (turn("01J00000000000000000000003"), "nothing left to do".to_owned()),
+            ],
+            true,
+            &mut headed,
+        );
+        assert_eq!(
+            first_page,
+            [
+                "turn 01J00000000000000000000001",
+                "read the issue",
+                "opened a pull request",
+                "turn 01J00000000000000000000002",
+                "fixed the review",
+            ]
+        );
+        assert_eq!(
+            second_page,
+            [
+                "pushed the fix",
+                "turn 01J00000000000000000000003",
+                "nothing left to do"
+            ]
+        );
     }
 }
