@@ -1,0 +1,20 @@
+{
+  "name": "tumpel-cli",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "fix": "cargo fmt",
+    "comments:check": "node npm-scripts/comments-check.mjs",
+    "secrets:check": "node npm-scripts/secrets-check.mjs",
+    "clippy": "cargo clippy --all-targets -- -D warnings",
+    "fmt:check": "cargo fmt --check",
+    "check": "npm run comments:check && npm run secrets:check && npm run clippy && npm run fmt:check",
+    "test": "cargo test",
+    "build:static": "RUSTFLAGS=\"-C target-feature=+crt-static\" cargo build --release --target ${TUMPEL_TARGET:-x86_64-unknown-linux-gnu}",
+    "prepare": "git config core.hooksPath .githooks"
+  }
+}

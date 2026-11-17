@@ -1,0 +1,57 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: never
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install
+
+      - name: Check that the tag matches the crate version
+        run: |
+          version=$(sed -n '0,/^version = /s/^version = "\(.*\)"$/\1/p' Cargo.toml)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "the tag is $GITHUB_REF_NAME but Cargo.toml names version $version; set the package version to match and tag again" >&2
+            exit 1
+          fi
+          echo "TUMPEL_RELEASE_VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Build the static x86_64 binary
+        env:
+          TUMPEL_TARGET: x86_64-unknown-linux-gnu
+        run: npm run build:static
+
+      - name: Stage the binary and its sha256
+        run: |
+          mkdir dist
+          cp target/x86_64-unknown-linux-gnu/release/tumpel dist/tumpel-x86_64-linux
+          cd dist
+          sha256sum tumpel-x86_64-linux > tumpel-x86_64-linux.sha256
+          ./tumpel-x86_64-linux --version
+
+      - name: Create the GitHub release with the binary and its sha256
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --title "$GITHUB_REF_NAME" --generate-notes
+
+      - name: Publish tumpel to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish

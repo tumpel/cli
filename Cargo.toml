@@ -1,0 +1,40 @@
+[package]
+name = "tumpel"
+version = "0.1.0"
+edition = "2021"
+description = "The command line client for tumpel: sign in, configure a tenant and drive sessions"
+readme = "README.md"
+license = "Apache-2.0"
+repository = "https://github.com/tumpel/cli"
+include = ["/Cargo.toml", "/Cargo.lock", "/README.md", "/LICENSE", "/NOTICE", "/build.rs", "/release_version.rs", "/src/**"]
+
+[[bin]]
+name = "tumpel"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.104"
+base64 = "0.22.1"
+chrono = { version = "0.4.45", features = ["serde"] }
+clap = { version = "4.6.7", features = ["derive"] }
+hostname = "0.4.2"
+jsonschema = { version = "0.61.2", default-features = false }
+reqwest = { version = "0.13.4", features = ["json"] }
+ring = "0.17.14"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+tokio = { version = "1.54.1", features = ["rt", "macros", "time", "net", "signal"] }
+tumpel-api = "=0.1.1"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+missing_errors_doc = "allow"
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+
+[profile.release]
+lto = true
+codegen-units = 1
