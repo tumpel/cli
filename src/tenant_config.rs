@@ -492,6 +492,7 @@ pub fn starter(live: &Live) -> Result<TenantConfig> {
                     })
                     .collect::<Result<_>>()?;
                 Ok(ConfigPersona {
+                    box_retention: Some(persona.box_retention),
                     box_memory_mib: persona.box_memory_mib,
                     box_disk_mib: persona.box_disk_mib,
                     connector_names,

@@ -7,7 +7,9 @@ use chrono::{DateTime, FixedOffset};
 use std::num::NonZeroU32;
 use std::str::FromStr;
 use std::time::Duration;
-use tumpel_api::types::{EntityId, SessionStart, SessionStartFromIssue, SessionState, TranscriptPage, Turn, TurnSend};
+use tumpel_api::types::{
+    BoxRetention, EntityId, SessionStart, SessionStartFromIssue, SessionState, TranscriptPage, Turn, TurnSend,
+};
 use tumpel_api::{Client, Error};
 
 const FIRST_BACKOFF: Duration = Duration::from_millis(250);
@@ -24,6 +26,10 @@ where
         .map_err(|error| anyhow::anyhow!("{flag} {value:?} is not valid: {error}"))
 }
 
+pub(crate) fn retention(value: Option<&str>) -> Result<Option<BoxRetention>> {
+    value.map(|value| parsed("--box-retention", value)).transpose()
+}
+
 pub(crate) fn id(flag: &str, value: &str) -> Result<EntityId> {
     parsed(flag, value)
 }
@@ -37,8 +43,10 @@ pub async fn session(command: SessionCommand) -> Result<()> {
             model,
             persona_id,
             prompt,
+            box_retention,
         } => {
             let body = SessionStart {
+                box_retention: retention(box_retention.as_deref())?,
                 model: parsed("--model", &model)?,
                 persona_id: id("--persona-id", &persona_id)?,
                 prompt: parsed("--prompt", &prompt)?,
@@ -54,8 +62,10 @@ pub async fn session(command: SessionCommand) -> Result<()> {
             issue_number,
             model,
             persona_id,
+            box_retention,
         } => {
             let body = SessionStartFromIssue {
+                box_retention: retention(box_retention.as_deref())?,
                 issue_number: parsed("--issue-number", &issue_number)?,
                 model: parsed("--model", &model)?,
                 persona_id: id("--persona-id", &persona_id)?,
