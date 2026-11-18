@@ -1,4 +1,4 @@
-use crate::sessions::parsed;
+use crate::sessions::{parsed, retention};
 use crate::tenant_config;
 use crate::{
     answered, print_json, shown, signed_in, HarnessCommand, PersonaCommand, PersonaFields, SecretMemberCommand,
@@ -97,6 +97,7 @@ async fn persona_create(
         return read_json(&file.unwrap_or_default(), "PersonaCreate");
     };
     Ok(PersonaCreate {
+        box_retention: retention(fields.box_retention.as_deref())?,
         box_memory_mib: fields.box_memory_mib,
         box_disk_mib: fields.box_disk_mib,
         connector_ids: connector_ids(&fields.connector)?,
@@ -115,6 +116,7 @@ struct PersonaChange {
     no_connectors: bool,
     box_memory_mib: Option<i32>,
     box_disk_mib: Option<i32>,
+    box_retention: Option<String>,
 }
 
 async fn persona_update(client: &Client, url: &str, id: &EntityId, change: PersonaChange) -> Result<PersonaUpdate> {
@@ -126,6 +128,7 @@ async fn persona_update(client: &Client, url: &str, id: &EntityId, change: Perso
         no_connectors,
         box_memory_mib,
         box_disk_mib,
+        box_retention,
     } = change;
     let current = answered(client.personas_get(id).await, || url.to_string())?;
     let files = if persona_file.is_empty() {
@@ -157,6 +160,9 @@ async fn persona_update(client: &Client, url: &str, id: &EntityId, change: Perso
         connector_ids(&connector)?
     };
     Ok(PersonaUpdate {
+        box_retention: Some(
+            box_retention.map_or(Ok(current.box_retention), |value| parsed("--box-retention", &value))?,
+        ),
         box_memory_mib: box_memory_mib.or(current.box_memory_mib),
         box_disk_mib: box_disk_mib.or(current.box_disk_mib),
         connector_ids,
@@ -264,6 +270,7 @@ pub async fn personas(command: PersonaCommand) -> Result<()> {
             no_connectors,
             box_memory_mib,
             box_disk_mib,
+            box_retention,
         } => {
             let id = entity_id(&persona_id, "persona")?;
             let url = format!("{endpoint}/v1/personas/{persona_id}");
@@ -282,6 +289,7 @@ pub async fn personas(command: PersonaCommand) -> Result<()> {
                             no_connectors,
                             box_memory_mib,
                             box_disk_mib,
+                            box_retention,
                         },
                     )
                     .await?

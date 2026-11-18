@@ -311,12 +311,12 @@ enum PersonaCommand {
         persona_id: String,
     },
     /// Replace a persona with a `PersonaUpdate` JSON file, or change the parts its flags name; --persona-file replaces the whole file set.
-    #[command(group(ArgGroup::new("change").required(true).multiple(true).args(["file", "name", "secret_set_id", "persona_file", "connector", "no_connectors", "box_memory_mib", "box_disk_mib"])))]
+    #[command(group(ArgGroup::new("change").required(true).multiple(true).args(["file", "name", "secret_set_id", "persona_file", "connector", "no_connectors", "box_memory_mib", "box_disk_mib", "box_retention"])))]
     Update {
         /// The `personaId` that tumpel persona list prints.
         persona_id: String,
         /// The `PersonaUpdate` JSON file.
-        #[arg(long, conflicts_with_all = ["name", "secret_set_id", "persona_file", "connector", "no_connectors", "box_memory_mib", "box_disk_mib"])]
+        #[arg(long, conflicts_with_all = ["name", "secret_set_id", "persona_file", "connector", "no_connectors", "box_memory_mib", "box_disk_mib", "box_retention"])]
         file: Option<PathBuf>,
         /// The new persona name; left out, the name stays.
         #[arg(long)]
@@ -339,6 +339,9 @@ enum PersonaCommand {
         /// The disk in MiB of each box the persona's sessions boot, from 32768 up to 262144; left out, the disk stays.
         #[arg(long)]
         box_disk_mib: Option<i32>,
+        /// What happens to a session's box after each turn: Off, Warm or Auto; left out, the mode stays.
+        #[arg(long, value_name = "Off|Warm|Auto")]
+        box_retention: Option<String>,
     },
     /// Delete a persona.
     Delete {
@@ -487,6 +490,9 @@ struct PersonaFields {
     /// The disk in MiB of each box the persona's sessions boot, from 32768 up to 262144; left out, boxes get 32768.
     #[arg(long)]
     box_disk_mib: Option<i32>,
+    /// What happens to a session's box after each turn: Off tears it down, Warm keeps it until a stop, Auto keeps it until placement needs the room; left out, Auto.
+    #[arg(long, value_name = "Off|Warm|Auto")]
+    box_retention: Option<String>,
 }
 
 #[derive(Args)]
@@ -545,6 +551,9 @@ enum SessionCommand {
         /// The first prompt.
         #[arg(long)]
         prompt: String,
+        /// What happens to the session's box after each turn: Off, Warm or Auto; left out, the persona's mode.
+        #[arg(long, value_name = "Off|Warm|Auto")]
+        box_retention: Option<String>,
     },
     /// Start a session from an open GitHub issue; the control plane writes the first prompt from it.
     StartFromIssue {
@@ -563,6 +572,9 @@ enum SessionCommand {
         /// The personaId tumpel persona list prints; the session runs that persona's harness, files and secret set.
         #[arg(long)]
         persona_id: String,
+        /// What happens to the session's box after each turn: Off, Warm or Auto; left out, the persona's mode.
+        #[arg(long, value_name = "Off|Warm|Auto")]
+        box_retention: Option<String>,
     },
     /// Show one session with the stops of it that failed, the prebuild layer its files start from or why they start without one, and the image its latest turn boots.
     Get {
