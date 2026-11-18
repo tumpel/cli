@@ -305,12 +305,12 @@ enum PersonaCommand {
         persona_id: String,
     },
     /// Replace a persona with a `PersonaUpdate` JSON file, or change the parts its flags name; --persona-file replaces the whole file set.
-    #[command(group(ArgGroup::new("change").required(true).multiple(true).args(["file", "name", "secret_set_id", "persona_file", "box_memory_mib"])))]
+    #[command(group(ArgGroup::new("change").required(true).multiple(true).args(["file", "name", "secret_set_id", "persona_file", "box_memory_mib", "box_disk_mib"])))]
     Update {
         /// The `personaId` that tumpel persona list prints.
         persona_id: String,
         /// The `PersonaUpdate` JSON file.
-        #[arg(long, conflicts_with_all = ["name", "secret_set_id", "persona_file", "box_memory_mib"])]
+        #[arg(long, conflicts_with_all = ["name", "secret_set_id", "persona_file", "box_memory_mib", "box_disk_mib"])]
         file: Option<PathBuf>,
         /// The new persona name; left out, the name stays.
         #[arg(long)]
@@ -324,6 +324,9 @@ enum PersonaCommand {
         /// The memory in MiB of each box the persona's sessions boot, from 4096 up to 65536; left out, the memory stays.
         #[arg(long)]
         box_memory_mib: Option<i32>,
+        /// The disk in MiB of each box the persona's sessions boot, from 32768 up to 262144; left out, the disk stays.
+        #[arg(long)]
+        box_disk_mib: Option<i32>,
     },
     /// Delete a persona.
     Delete {
@@ -399,6 +402,9 @@ struct PersonaFields {
     /// The memory in MiB of each box the persona's sessions boot, from 4096 up to 65536; left out, boxes get 4096.
     #[arg(long)]
     box_memory_mib: Option<i32>,
+    /// The disk in MiB of each box the persona's sessions boot, from 32768 up to 262144; left out, boxes get 32768.
+    #[arg(long)]
+    box_disk_mib: Option<i32>,
 }
 
 #[derive(Args)]
