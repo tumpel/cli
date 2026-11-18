@@ -33,6 +33,10 @@ fn read_json<T: DeserializeOwned>(file: &Path, schema: &str) -> Result<T> {
     })
 }
 
+fn connector_ids(raw: &[String]) -> Result<Vec<EntityId>> {
+    raw.iter().map(|id| entity_id(id, "connector")).collect()
+}
+
 fn harness(raw: &str) -> Result<Harness> {
     raw.parse()
         .map_err(|error| anyhow!("{raw:?} is not a harness; tumpel harness list names them ({error})"))
@@ -95,6 +99,7 @@ async fn persona_create(
     Ok(PersonaCreate {
         box_memory_mib: fields.box_memory_mib,
         box_disk_mib: fields.box_disk_mib,
+        connector_ids: connector_ids(&fields.connector)?,
         files: persona_files(client, &fields.persona_file, "tumpel persona create").await?,
         harness: harness(&fields.harness)?,
         name: parsed("--name", &fields.name)?,
@@ -106,6 +111,8 @@ struct PersonaChange {
     name: Option<String>,
     secret_set_id: Option<String>,
     persona_file: Vec<String>,
+    connector: Vec<String>,
+    no_connectors: bool,
     box_memory_mib: Option<i32>,
     box_disk_mib: Option<i32>,
 }
@@ -115,6 +122,8 @@ async fn persona_update(client: &Client, url: &str, id: &EntityId, change: Perso
         name,
         secret_set_id,
         persona_file,
+        connector,
+        no_connectors,
         box_memory_mib,
         box_disk_mib,
     } = change;
@@ -142,9 +151,15 @@ async fn persona_update(client: &Client, url: &str, id: &EntityId, change: Perso
     } else {
         persona_files(client, &persona_file, "tumpel persona update").await?
     };
+    let connector_ids = if connector.is_empty() && !no_connectors {
+        current.connector_ids
+    } else {
+        connector_ids(&connector)?
+    };
     Ok(PersonaUpdate {
         box_memory_mib: box_memory_mib.or(current.box_memory_mib),
         box_disk_mib: box_disk_mib.or(current.box_disk_mib),
+        connector_ids,
         files,
         name: name.map_or(Ok(current.name), |name| parsed("--name", &name))?,
         secret_set_id: secret_set_id.map_or(Ok(current.secret_set_id), |raw| entity_id(&raw, "secret set"))?,
@@ -245,6 +260,8 @@ pub async fn personas(command: PersonaCommand) -> Result<()> {
             name,
             secret_set_id,
             persona_file,
+            connector,
+            no_connectors,
             box_memory_mib,
             box_disk_mib,
         } => {
@@ -261,6 +278,8 @@ pub async fn personas(command: PersonaCommand) -> Result<()> {
                             name,
                             secret_set_id,
                             persona_file,
+                            connector,
+                            no_connectors,
                             box_memory_mib,
                             box_disk_mib,
                         },
@@ -383,5 +402,17 @@ pub async fn secret_sets(command: SecretSetCommand) -> Result<()> {
             eprintln!("deleted secret set {secret_set_id}");
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::stdin_value;
+
+    #[test]
+    fn stdin_value_drops_one_trailing_newline_and_refuses_an_empty_value() {
+        assert_eq!(&*stdin_value("tok\n", "the connector token").unwrap(), "tok");
+        assert_eq!(&*stdin_value("tok\r\n", "the connector token").unwrap(), "tok");
+        assert!(stdin_value("\n", "the connector token").is_err());
     }
 }

@@ -3,6 +3,7 @@ mod circleci_authorize;
 mod claude_setups;
 mod config;
 mod connections;
+mod connectors;
 mod members;
 mod metrics;
 mod openrouter;
@@ -80,6 +81,11 @@ enum Command {
     Persona {
         #[command(subcommand)]
         command: PersonaCommand,
+    },
+    /// Create, list, read, update, delete, connect or disconnect the remote MCP servers personas reach (Owner only to change).
+    Connector {
+        #[command(subcommand)]
+        command: ConnectorCommand,
     },
     /// Create, list, read, update or delete secret sets; values come from environment variables, never arguments.
     SecretSet {
@@ -305,12 +311,12 @@ enum PersonaCommand {
         persona_id: String,
     },
     /// Replace a persona with a `PersonaUpdate` JSON file, or change the parts its flags name; --persona-file replaces the whole file set.
-    #[command(group(ArgGroup::new("change").required(true).multiple(true).args(["file", "name", "secret_set_id", "persona_file", "box_memory_mib", "box_disk_mib"])))]
+    #[command(group(ArgGroup::new("change").required(true).multiple(true).args(["file", "name", "secret_set_id", "persona_file", "connector", "no_connectors", "box_memory_mib", "box_disk_mib"])))]
     Update {
         /// The `personaId` that tumpel persona list prints.
         persona_id: String,
         /// The `PersonaUpdate` JSON file.
-        #[arg(long, conflicts_with_all = ["name", "secret_set_id", "persona_file", "box_memory_mib", "box_disk_mib"])]
+        #[arg(long, conflicts_with_all = ["name", "secret_set_id", "persona_file", "connector", "no_connectors", "box_memory_mib", "box_disk_mib"])]
         file: Option<PathBuf>,
         /// The new persona name; left out, the name stays.
         #[arg(long)]
@@ -321,6 +327,12 @@ enum PersonaCommand {
         /// A persona file as `<path in the harness home>=<local file>`; repeat it for each file. Left out, the files stay.
         #[arg(long, value_name = "PATH=LOCAL")]
         persona_file: Vec<String>,
+        /// The `connectorId` of a connector every session of the persona reaches; repeat it for each connector. It replaces the whole list; left out, the list stays.
+        #[arg(long = "connector", value_name = "CONNECTOR_ID")]
+        connector: Vec<String>,
+        /// Give the persona no connectors.
+        #[arg(long, conflicts_with = "connector")]
+        no_connectors: bool,
         /// The memory in MiB of each box the persona's sessions boot, from 4096 up to 65536; left out, the memory stays.
         #[arg(long)]
         box_memory_mib: Option<i32>,
@@ -337,6 +349,66 @@ enum PersonaCommand {
     UploadFile {
         /// The local file to upload.
         file: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
+enum ConnectorCommand {
+    /// List the tenant's connectors with their status.
+    List,
+    /// Show one connector.
+    Get {
+        /// The `connectorId` that tumpel connector list prints.
+        connector_id: String,
+    },
+    /// Create a connector that sends one bearer token to a remote MCP server; set the token with set-token.
+    CreateStatic {
+        /// The connector name, unique in the tenant.
+        #[arg(long)]
+        name: String,
+        /// The HTTPS address of the MCP server; it never changes once the connector exists.
+        #[arg(long)]
+        url: String,
+    },
+    /// Create a connector that signs in to a remote MCP server with OAuth; connect it with authorize.
+    CreateOauth {
+        /// The connector name, unique in the tenant.
+        #[arg(long)]
+        name: String,
+        /// The HTTPS address of the MCP server; it never changes once the connector exists.
+        #[arg(long)]
+        url: String,
+    },
+    /// Rename a connector; its address never changes.
+    Update {
+        /// The `connectorId` that tumpel connector list prints.
+        connector_id: String,
+        /// The new connector name.
+        #[arg(long)]
+        name: String,
+    },
+    /// Delete a connector and its credential; it is refused while a persona lists it or a running turn uses it.
+    Delete {
+        /// The `connectorId` that tumpel connector list prints.
+        connector_id: String,
+    },
+    /// Start the sign-in of an OAuth connector and print the link an Owner opens, the attempt id and when the attempt expires.
+    Authorize {
+        /// The `connectorId` of an OAuth connector.
+        connector_id: String,
+    },
+    /// Set the bearer token of a static connector, read from stdin.
+    SetToken {
+        /// The `connectorId` of a static connector.
+        connector_id: String,
+        /// Read the token from stdin; it is never taken as an argument.
+        #[arg(long)]
+        stdin: bool,
+    },
+    /// Disconnect a connector: new turns stop using it, and turns already running keep it until they end.
+    ClearCredential {
+        /// The `connectorId` that tumpel connector list prints.
+        connector_id: String,
     },
 }
 
@@ -399,6 +471,16 @@ struct PersonaFields {
     /// A persona file as `<path in the harness home>=<local file>`, such as `.claude/settings.json=./settings.json`; repeat it for each file.
     #[arg(long, value_name = "PATH=LOCAL")]
     persona_file: Vec<String>,
+    /// The `connectorId` of a connector every session of the persona reaches; repeat it for each connector.
+    #[arg(
+        long = "connector",
+        value_name = "CONNECTOR_ID",
+        required_unless_present = "no_connectors"
+    )]
+    connector: Vec<String>,
+    /// Give the persona no connectors.
+    #[arg(long, conflicts_with = "connector")]
+    no_connectors: bool,
     /// The memory in MiB of each box the persona's sessions boot, from 4096 up to 65536; left out, boxes get 4096.
     #[arg(long)]
     box_memory_mib: Option<i32>,
@@ -1371,6 +1453,7 @@ fn main() -> ExitCode {
             Command::Harness { command } => resources::harnesses(command).await,
             Command::Release { command } => release(command).await,
             Command::Persona { command } => resources::personas(command).await,
+            Command::Connector { command } => connectors::connector(command).await,
             Command::SecretSet { command } => resources::secret_sets(command).await,
             Command::Github { command } => github(command).await,
             Command::Config { command } => tenant_config(command).await,
@@ -1431,5 +1514,62 @@ mod tests {
             shown(outcome, String::new).unwrap_err().to_string(),
             "Host retired: The host left the pool. Enrol it again"
         );
+    }
+
+    fn parses(args: &[&str]) -> bool {
+        Cli::try_parse_from(["tumpel"].into_iter().chain(args.iter().copied())).is_ok()
+    }
+
+    const PERSONA: [&str; 9] = [
+        "persona",
+        "create",
+        "--name",
+        "dev",
+        "--harness",
+        "ClaudeCode",
+        "--secret-set-id",
+        "5a8c0b0e-0000-4000-8000-000000000001",
+        "--persona-file=a=b",
+    ];
+
+    #[test]
+    fn persona_create_needs_connectors_or_an_explicit_none() {
+        assert!(!parses(&PERSONA));
+        assert!(parses(&[&PERSONA[..], &["--no-connectors"]].concat()));
+        assert!(parses(
+            &[&PERSONA[..], &["--connector", "a", "--connector", "b"]].concat()
+        ));
+        assert!(!parses(
+            &[&PERSONA[..], &["--connector", "a", "--no-connectors"]].concat()
+        ));
+    }
+
+    #[test]
+    fn persona_update_takes_connectors_alone_or_an_explicit_none() {
+        assert!(parses(&["persona", "update", "p1", "--connector", "a"]));
+        assert!(parses(&["persona", "update", "p1", "--no-connectors"]));
+        assert!(!parses(&[
+            "persona",
+            "update",
+            "p1",
+            "--connector",
+            "a",
+            "--no-connectors"
+        ]));
+        assert!(!parses(&[
+            "persona",
+            "update",
+            "p1",
+            "--file",
+            "f.json",
+            "--no-connectors"
+        ]));
+    }
+
+    #[test]
+    fn a_connector_secret_is_never_an_argument() {
+        assert!(parses(&["connector", "set-token", "c1", "--stdin"]));
+        assert!(!parses(&["connector", "set-token", "c1", "--token", "secret"]));
+        assert!(!parses(&["connector", "set-token", "c1", "secret"]));
     }
 }
