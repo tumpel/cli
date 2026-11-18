@@ -8,11 +8,11 @@ use tumpel_api::types::{
     ApiKeyUpdate, ApiKeyUpdateKind, ApiKeyValue, ApiKeyValueKind, ConfigApiKey, ConfigApiKeyKind, ConfigExpiry,
     ConfigExpiryValue, ConfigHost, ConfigPersona, ConfigPersonaFile, ConfigPlan, ConfigSecret, ConfigSecretSet,
     ConfigSecretValue, ConfigSecretVariable, ConfigSecretVariableKind, ConfigSubscriptionToken,
-    ConfigSubscriptionTokenKind, EffectiveHarnessVersion, EnvironmentVariableName, HarnessPinCreate, Host, HostState,
-    Persona, PersonaFile, PersonaFilePath, Problem, SecretKey, SecretMemberUpdate, SecretName, SecretSet, SecretValue,
-    SecretValueSource, SecretVariableUpdate, SecretVariableUpdateKind, SecretVariableValue, SecretVariableValueKind,
-    Sha256Digest, SubscriptionTokenUpdate, SubscriptionTokenUpdateKind, SubscriptionTokenValue,
-    SubscriptionTokenValueKind, TenantConfig, TenantConfigApply, TenantConfigPlanRequest,
+    ConfigSubscriptionTokenKind, Connector, DisplayName, EffectiveHarnessVersion, EntityId, EnvironmentVariableName,
+    HarnessPinCreate, Host, HostState, Persona, PersonaFile, PersonaFilePath, Problem, SecretKey, SecretMemberUpdate,
+    SecretName, SecretSet, SecretValue, SecretValueSource, SecretVariableUpdate, SecretVariableUpdateKind,
+    SecretVariableValue, SecretVariableValueKind, Sha256Digest, SubscriptionTokenUpdate, SubscriptionTokenUpdateKind,
+    SubscriptionTokenValue, SubscriptionTokenValueKind, TenantConfig, TenantConfigApply, TenantConfigPlanRequest,
 };
 use tumpel_api::{Client, Error, TENANT_CONFIG_SCHEMA};
 
@@ -20,6 +20,13 @@ fn held_digest(file: &PersonaFile) -> &Sha256Digest {
     match file {
         PersonaFile::InlinePersonaFileRead(file) => &file.digest,
         PersonaFile::StoredPersonaFileRead(file) => &file.digest,
+    }
+}
+
+fn connector_identity(connector: &Connector) -> (&EntityId, &DisplayName) {
+    match connector {
+        Connector::StaticConnector(connector) => (&connector.connector_id, &connector.name),
+        Connector::OAuthConnector(connector) => (&connector.connector_id, &connector.name),
     }
 }
 
@@ -94,6 +101,7 @@ pub struct Live {
     pub secret_sets: Vec<SecretSet>,
     pub pins: Vec<EffectiveHarnessVersion>,
     pub hosts: Vec<Host>,
+    pub connectors: Vec<Connector>,
 }
 
 pub async fn live(client: &Client) -> Result<Live> {
@@ -102,6 +110,7 @@ pub async fn live(client: &Client) -> Result<Live> {
         secret_sets: answer(client.secret_sets_list(), "listing secret sets").await?,
         pins: answer(client.harness_catalog_list_pins(), "listing harness pins").await?,
         hosts: answer(client.hosts_list(), "listing hosts").await?,
+        connectors: answer(client.connectors_list(), "listing connectors").await?,
     })
 }
 
@@ -442,6 +451,12 @@ pub fn starter(live: &Live) -> Result<TenantConfig> {
             })
         })
         .collect::<Result<_>>()?;
+    let connector_names: HashMap<&str, &DisplayName> = live
+        .connectors
+        .iter()
+        .map(connector_identity)
+        .map(|(id, name)| (id.as_str(), name))
+        .collect();
     let set_names: HashMap<&str, &SecretSet> = live
         .secret_sets
         .iter()
@@ -460,9 +475,26 @@ pub fn starter(live: &Live) -> Result<TenantConfig> {
                         *persona.secret_set_id
                     )
                 })?;
+                let connector_names = persona
+                    .connector_ids
+                    .iter()
+                    .map(|id| {
+                        connector_names
+                            .get(id.as_str())
+                            .map(|name| (*name).clone())
+                            .ok_or_else(|| {
+                                anyhow!(
+                                    "persona {} lists connector {}, which tumpel connector list does not show",
+                                    *persona.name,
+                                    **id
+                                )
+                            })
+                    })
+                    .collect::<Result<_>>()?;
                 Ok(ConfigPersona {
                     box_memory_mib: persona.box_memory_mib,
                     box_disk_mib: persona.box_disk_mib,
+                    connector_names,
                     files: persona
                         .files
                         .iter()
@@ -587,7 +619,7 @@ mod tests {
         let document = json!({
             "$schema": "https://example.test/TenantConfig.json",
             "personas": [{
-                "name": "", "harness": "ClaudeCode", "secretSetName": "prod", "files": [],
+                "name": "", "harness": "ClaudeCode", "secretSetName": "prod", "connectorNames": [], "files": [],
             }],
             "secretSets": [{
                 "name": "prod",
