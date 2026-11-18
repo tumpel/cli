@@ -1547,9 +1547,7 @@ mod tests {
     #[test]
     fn persona_create_takes_a_file_alone() {
         assert!(parses(&["persona", "create", "--file", "f.json"]));
-        assert!(!parses(&[
-            "persona", "create", "--file", "f.json", "--connector", "a"
-        ]));
+        assert!(!parses(&["persona", "create", "--file", "f.json", "--connector", "a"]));
     }
 
     #[test]
