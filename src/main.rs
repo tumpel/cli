@@ -491,10 +491,17 @@ enum SessionCommand {
         /// The sessionId tumpel session list prints.
         session_id: String,
     },
-    /// Archive a stopped session: delete its snapshots, keep its transcript and refuse later sends.
+    /// Archive idle, stopped or failed sessions: discard an idle session's box, delete its snapshots, keep its transcript and refuse later sends.
     Archive {
-        /// The sessionId tumpel session list prints.
-        session_id: String,
+        /// The sessionIds tumpel session list prints; give several to archive each of them.
+        #[arg(required_unless_present_any = ["state", "last_turn_before"], conflicts_with_all = ["state", "last_turn_before"])]
+        session_ids: Vec<String>,
+        /// Archive every session in this state: Idle, Stopped or Failed.
+        #[arg(long)]
+        state: Option<String>,
+        /// Archive every session whose latest turn last changed state at or before this time, such as 2026-11-17T12:00:00Z.
+        #[arg(long)]
+        last_turn_before: Option<String>,
     },
     /// List the credential handovers of a session, oldest first: variable names, never values.
     Handovers {
@@ -516,6 +523,9 @@ enum SessionCommand {
         /// Only sessions on this host.
         #[arg(long)]
         host_id: Option<String>,
+        /// Only sessions whose latest turn last changed state at or before this time, such as 2026-11-17T12:00:00Z.
+        #[arg(long)]
+        last_turn_before: Option<String>,
     },
 }
 

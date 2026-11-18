@@ -1,13 +1,14 @@
 use crate::{
-    answered, print_json, shown, signed_in, SessionCommand, SnapshotCommand, TranscriptArgs, TranscriptCommand,
-    TurnCommand,
+    answered, print_json, problem_text, shown, signed_in, SessionCommand, SnapshotCommand, TranscriptArgs,
+    TranscriptCommand, TurnCommand,
 };
 use anyhow::{bail, Result};
+use chrono::{DateTime, FixedOffset};
 use std::num::NonZeroU32;
 use std::str::FromStr;
 use std::time::Duration;
 use tumpel_api::types::{EntityId, SessionStart, SessionStartFromIssue, SessionState, TranscriptPage, Turn, TurnSend};
-use tumpel_api::Client;
+use tumpel_api::{Client, Error};
 
 const FIRST_BACKOFF: Duration = Duration::from_millis(250);
 const MAX_BACKOFF: Duration = Duration::from_secs(5);
@@ -83,12 +84,11 @@ pub async fn session(command: SessionCommand) -> Result<()> {
                 format!("{endpoint}/v1/sessions/{session_id}/stop")
             })?)
         }
-        SessionCommand::Archive { session_id } => {
-            let session = id("sessionId", &session_id)?;
-            print_json(&shown(client.sessions_archive(&session).await, || {
-                format!("{endpoint}/v1/sessions/{session_id}/archive")
-            })?)
-        }
+        SessionCommand::Archive {
+            session_ids,
+            state,
+            last_turn_before,
+        } => archive(&client, &endpoint, &session_ids, state, last_turn_before).await,
         SessionCommand::Handovers { session_id } => {
             let session = id("sessionId", &session_id)?;
             print_json(&shown(
@@ -100,14 +100,22 @@ pub async fn session(command: SessionCommand) -> Result<()> {
             let session = id("sessionId", &session_id)?;
             print_transcript(&client, &endpoint, session, None, read).await
         }
-        SessionCommand::List { state, host_id } => {
+        SessionCommand::List {
+            state,
+            host_id,
+            last_turn_before,
+        } => {
             let state = state
                 .map(|value| parsed::<SessionState>("--state", &value))
                 .transpose()?;
             let host = host_id.map(|value| id("--host-id", &value)).transpose()?;
-            print_json(&shown(client.sessions_list(host.as_ref(), None, state).await, || {
-                format!("{endpoint}/v1/sessions")
-            })?)
+            let before = last_turn_before
+                .map(|value| parsed::<DateTime<FixedOffset>>("--last-turn-before", &value))
+                .transpose()?;
+            print_json(&shown(
+                client.sessions_list(host.as_ref(), before.as_ref(), state).await,
+                || format!("{endpoint}/v1/sessions"),
+            )?)
         }
     }
 }
@@ -164,6 +172,62 @@ pub async fn snapshot(command: SnapshotCommand) -> Result<()> {
             })?)
         }
     }
+}
+
+async fn archive(
+    client: &Client,
+    endpoint: &str,
+    session_ids: &[String],
+    state: Option<String>,
+    last_turn_before: Option<String>,
+) -> Result<()> {
+    if let [session_id] = session_ids {
+        let session = id("sessionId", session_id)?;
+        return print_json(&shown(client.sessions_archive(&session).await, || {
+            format!("{endpoint}/v1/sessions/{session_id}/archive")
+        })?);
+    }
+    let sessions = if session_ids.is_empty() {
+        let state = state
+            .map(|value| parsed::<SessionState>("--state", &value))
+            .transpose()?;
+        let before = last_turn_before
+            .map(|value| parsed::<DateTime<FixedOffset>>("--last-turn-before", &value))
+            .transpose()?;
+        answered(client.sessions_list(None, before.as_ref(), state).await, || {
+            format!("{endpoint}/v1/sessions")
+        })?
+        .into_iter()
+        .map(|session| session.session_id)
+        .collect()
+    } else {
+        session_ids
+            .iter()
+            .map(|value| id("sessionId", value))
+            .collect::<Result<Vec<_>>>()?
+    };
+    let mut archived = Vec::new();
+    let mut refused = Vec::new();
+    for session in &sessions {
+        match client.sessions_archive(session).await {
+            Err(Error::ErrorResponse(problem)) => {
+                refused.push(format!("session {}: {}", **session, problem_text(&problem)));
+            }
+            outcome => archived.push(shown(outcome, || {
+                format!("{endpoint}/v1/sessions/{}/archive", **session)
+            })?),
+        }
+    }
+    print_json(&archived)?;
+    if !refused.is_empty() {
+        bail!(
+            "{} of {} sessions were not archived:\n{}",
+            refused.len(),
+            sessions.len(),
+            refused.join("\n")
+        );
+    }
+    Ok(())
 }
 
 #[derive(Debug, PartialEq, Eq)]
