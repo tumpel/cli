@@ -9,12 +9,26 @@ use tumpel_api::types::{
     ConfigExpiryValue, ConfigHost, ConfigPersona, ConfigPersonaFile, ConfigPlan, ConfigSecret, ConfigSecretSet,
     ConfigSecretValue, ConfigSecretVariable, ConfigSecretVariableKind, ConfigSubscriptionToken,
     ConfigSubscriptionTokenKind, EffectiveHarnessVersion, EnvironmentVariableName, HarnessPinCreate, Host, HostState,
-    Persona, Problem, SecretKey, SecretMemberUpdate, SecretName, SecretSet, SecretValue, SecretValueSource,
-    SecretVariableUpdate, SecretVariableUpdateKind, SecretVariableValue, SecretVariableValueKind,
-    SubscriptionTokenUpdate, SubscriptionTokenUpdateKind, SubscriptionTokenValue, SubscriptionTokenValueKind,
-    TenantConfig, TenantConfigApply, TenantConfigPlanRequest,
+    Persona, PersonaFile, PersonaFilePath, Problem, SecretKey, SecretMemberUpdate, SecretName, SecretSet, SecretValue,
+    SecretValueSource, SecretVariableUpdate, SecretVariableUpdateKind, SecretVariableValue, SecretVariableValueKind,
+    Sha256Digest, SubscriptionTokenUpdate, SubscriptionTokenUpdateKind, SubscriptionTokenValue,
+    SubscriptionTokenValueKind, TenantConfig, TenantConfigApply, TenantConfigPlanRequest,
 };
 use tumpel_api::{Client, Error, TENANT_CONFIG_SCHEMA};
+
+fn held_digest(file: &PersonaFile) -> &Sha256Digest {
+    match file {
+        PersonaFile::InlinePersonaFileRead(file) => &file.digest,
+        PersonaFile::StoredPersonaFileRead(file) => &file.digest,
+    }
+}
+
+fn held_path(file: &PersonaFile) -> &PersonaFilePath {
+    match file {
+        PersonaFile::InlinePersonaFileRead(file) => &file.path,
+        PersonaFile::StoredPersonaFileRead(file) => &file.path,
+    }
+}
 
 fn schema() -> Result<Value> {
     serde_json::from_str(TENANT_CONFIG_SCHEMA).context("the built-in TenantConfig schema is not JSON; rebuild tumpel")
@@ -313,7 +327,7 @@ pub async fn apply(client: &Client, file: &Path, lookup: impl Fn(&str) -> Option
     let held: HashSet<&str> = personas
         .iter()
         .flat_map(|persona| persona.files.iter())
-        .map(|file| file.digest.as_str())
+        .map(|file| held_digest(file).as_str())
         .collect();
     let mut writes = Vec::with_capacity(files.len());
     for local in &files {
@@ -452,13 +466,13 @@ pub fn starter(live: &Live) -> Result<TenantConfig> {
                         .files
                         .iter()
                         .map(|file| {
-                            let from = starter_path(&persona.name, &file.path);
+                            let from = starter_path(&persona.name, held_path(file));
                             Ok(ConfigPersonaFile {
                                 from: from
                                     .clone()
                                     .try_into()
                                     .map_err(|error| anyhow!("{from} is not a usable local path: {error}"))?,
-                                path: file.path.clone(),
+                                path: held_path(file).clone(),
                             })
                         })
                         .collect::<Result<_>>()?,
