@@ -333,7 +333,7 @@ enum PersonaCommand {
         /// Give the persona no connectors.
         #[arg(long, conflicts_with = "connector")]
         no_connectors: bool,
-        /// The memory in MiB of each box the persona's sessions boot, from 4096 up to 65536; left out, the memory stays.
+        /// The memory in MiB of each box the persona's sessions boot, from 512 up to 65536; left out, the memory stays.
         #[arg(long)]
         box_memory_mib: Option<i32>,
         /// The disk in MiB of each box the persona's sessions boot, from 32768 up to 262144; left out, the disk stays.
@@ -481,7 +481,7 @@ struct PersonaFields {
     /// Give the persona no connectors.
     #[arg(long, conflicts_with = "connector")]
     no_connectors: bool,
-    /// The memory in MiB of each box the persona's sessions boot, from 4096 up to 65536; left out, boxes get 4096.
+    /// The memory in MiB of each box the persona's sessions boot, from 512 up to 65536; left out, boxes get 2048.
     #[arg(long)]
     box_memory_mib: Option<i32>,
     /// The disk in MiB of each box the persona's sessions boot, from 32768 up to 262144; left out, boxes get 32768.
