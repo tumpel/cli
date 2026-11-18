@@ -131,7 +131,6 @@ pub async fn turn(command: TurnCommand) -> Result<()> {
         } => {
             let session = id("sessionId", &session_id)?;
             let body = TurnSend {
-                goal: None,
                 prompt: parsed("--prompt", &prompt)?,
                 goal: goal.map(|value| parsed("--goal", &value)).transpose()?,
             };
