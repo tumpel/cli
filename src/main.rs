@@ -475,7 +475,7 @@ struct PersonaFields {
     #[arg(
         long = "connector",
         value_name = "CONNECTOR_ID",
-        required_unless_present = "no_connectors"
+        required_unless_present_any = ["no_connectors", "file"]
     )]
     connector: Vec<String>,
     /// Give the persona no connectors.
@@ -1542,6 +1542,14 @@ mod tests {
         assert!(!parses(
             &[&PERSONA[..], &["--connector", "a", "--no-connectors"]].concat()
         ));
+    }
+
+    #[test]
+    fn persona_create_takes_a_file_alone() {
+        assert!(parses(&["persona", "create", "--file", "f.json"]));
+        assert!(!parses(&[
+            "persona", "create", "--file", "f.json", "--connector", "a"
+        ]));
     }
 
     #[test]
