@@ -1,3 +1,5 @@
+<p align="center"><img src="doc/assets/mascot.svg" alt="The tumpel salamander" width="160"></p>
+
 # tumpel
 
 The command line client for tumpel. It signs a terminal in to a control plane, applies a tenant config and drives sessions, hosts and connections through the public API.
