@@ -4,6 +4,7 @@ mod claude_setups;
 mod config;
 mod connections;
 mod connectors;
+mod events;
 mod members;
 mod metrics;
 mod openrouter;
@@ -111,6 +112,11 @@ enum Command {
     Turn {
         #[command(subcommand)]
         command: TurnCommand,
+    },
+    /// Wait for or follow what happens in the tenant: turns ending, sessions going idle, hosts going offline.
+    Events {
+        #[command(subcommand)]
+        command: EventsCommand,
     },
     /// Read what the harness wrote in a turn.
     Transcript {
@@ -629,6 +635,40 @@ enum SessionCommand {
         /// Only sessions whose latest turn last changed state at or before this time, such as 2026-11-17T12:00:00Z.
         #[arg(long)]
         last_turn_before: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum EventsCommand {
+    /// Wait for the first event that matches, print it and exit; exit with an error when none happens in time.
+    Wait {
+        /// Start after this eventId, from an earlier event or wait; leave it out to wait for events from now on.
+        #[arg(long)]
+        after_event_id: Option<i64>,
+        /// Keep events of this type, such as `TurnCompleted`; repeat it for several types.
+        #[arg(long)]
+        event: Vec<tumpel_api::types::TenantEventType>,
+        /// Keep events of this session, by the sessionId tumpel session list prints.
+        #[arg(long)]
+        session_id: Option<String>,
+        /// Keep events of this turn, by the turnId tumpel turn send prints.
+        #[arg(long)]
+        turn_id: Option<String>,
+        /// The most seconds to wait in all.
+        #[arg(long)]
+        timeout_seconds: u64,
+    },
+    /// Print every event that matches as one JSON line, as it happens, until you stop the command.
+    Follow {
+        /// Start after this eventId, so a restarted follow misses nothing; leave it out to follow from now on.
+        #[arg(long)]
+        after_event_id: Option<i64>,
+        /// Keep events of this type, such as `SessionIdle`; repeat it for several types.
+        #[arg(long)]
+        event: Vec<tumpel_api::types::TenantEventType>,
+        /// Keep events of this session, by the sessionId tumpel session list prints.
+        #[arg(long)]
+        session_id: Option<String>,
     },
 }
 
@@ -1471,6 +1511,7 @@ fn main() -> ExitCode {
             Command::Config { command } => tenant_config(command).await,
             Command::Session { command } => sessions::session(command).await,
             Command::Turn { command } => sessions::turn(command).await,
+            Command::Events { command } => events::events(command).await,
             Command::Transcript { command } => sessions::transcript(command).await,
             Command::Snapshot { command } => sessions::snapshot(command).await,
             Command::Metrics { command } => metrics::metrics(command).await,
