@@ -3,12 +3,11 @@ use crate::{
     TurnCommand,
 };
 use anyhow::{bail, Result};
-use reqwest::StatusCode;
 use std::num::NonZeroU32;
 use std::str::FromStr;
 use std::time::Duration;
 use tumpel_api::types::{EntityId, SessionStart, SessionStartFromIssue, SessionState, TranscriptPage, Turn, TurnSend};
-use tumpel_api::{Client, Error};
+use tumpel_api::Client;
 
 const FIRST_BACKOFF: Duration = Duration::from_millis(250);
 const MAX_BACKOFF: Duration = Duration::from_secs(5);
@@ -279,21 +278,25 @@ async fn print_transcript(
                 return Ok(());
             }
             let last = match turn {
-                Some(turn) => turn,
+                Some(turn) => answered(client.turns_get(&turn).await, || {
+                    format!("{endpoint}/v1/turns/{}", *turn)
+                })?,
                 None => {
                     answered(client.sessions_get(&session).await, || {
                         format!("{endpoint}/v1/sessions/{}", *session)
                     })?
-                    .last_turn_id
+                    .last_turn
                 }
             };
-            return match client.turns_get_failure(&last).await {
-                Err(Error::ErrorResponse(problem)) if problem.status() == StatusCode::NOT_FOUND => Ok(()),
-                outcome => {
-                    let failure = answered(outcome, || format!("{endpoint}/v1/turns/{}/failure", *last))?;
-                    bail!("turn {} failed with {}: {}", *last, failure.reason, failure.detail)
-                }
-            };
+            if let Turn::FailedTurn(failed) = last {
+                bail!(
+                    "turn {} failed with {}: {}",
+                    *failed.turn_id,
+                    failed.reason,
+                    failed.detail
+                )
+            }
+            return Ok(());
         }
         if advanced {
             backoff = FIRST_BACKOFF;
