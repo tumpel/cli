@@ -94,6 +94,7 @@ async fn persona_create(
     };
     Ok(PersonaCreate {
         box_memory_mib: fields.box_memory_mib,
+        box_disk_mib: fields.box_disk_mib,
         files: persona_files(client, &fields.persona_file, "tumpel persona create").await?,
         harness: harness(&fields.harness)?,
         name: parsed("--name", &fields.name)?,
@@ -106,6 +107,7 @@ struct PersonaChange {
     secret_set_id: Option<String>,
     persona_file: Vec<String>,
     box_memory_mib: Option<i32>,
+    box_disk_mib: Option<i32>,
 }
 
 async fn persona_update(client: &Client, url: &str, id: &EntityId, change: PersonaChange) -> Result<PersonaUpdate> {
@@ -114,6 +116,7 @@ async fn persona_update(client: &Client, url: &str, id: &EntityId, change: Perso
         secret_set_id,
         persona_file,
         box_memory_mib,
+        box_disk_mib,
     } = change;
     let current = answered(client.personas_get(id).await, || url.to_string())?;
     let files = if persona_file.is_empty() {
@@ -141,6 +144,7 @@ async fn persona_update(client: &Client, url: &str, id: &EntityId, change: Perso
     };
     Ok(PersonaUpdate {
         box_memory_mib: box_memory_mib.or(current.box_memory_mib),
+        box_disk_mib: box_disk_mib.or(current.box_disk_mib),
         files,
         name: name.map_or(Ok(current.name), |name| parsed("--name", &name))?,
         secret_set_id: secret_set_id.map_or(Ok(current.secret_set_id), |raw| entity_id(&raw, "secret set"))?,
@@ -242,6 +246,7 @@ pub async fn personas(command: PersonaCommand) -> Result<()> {
             secret_set_id,
             persona_file,
             box_memory_mib,
+            box_disk_mib,
         } => {
             let id = entity_id(&persona_id, "persona")?;
             let url = format!("{endpoint}/v1/personas/{persona_id}");
@@ -257,6 +262,7 @@ pub async fn personas(command: PersonaCommand) -> Result<()> {
                             secret_set_id,
                             persona_file,
                             box_memory_mib,
+                            box_disk_mib,
                         },
                     )
                     .await?
