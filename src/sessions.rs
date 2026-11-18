@@ -372,13 +372,8 @@ async fn print_transcript(
                     .last_turn
                 }
             };
-            if let Turn::FailedTurn(failed) = last {
-                bail!(
-                    "turn {} failed with {}: {}",
-                    *failed.turn_id,
-                    failed.reason,
-                    failed.detail
-                )
+            if let Some(warning) = turn_outcome(last)? {
+                eprintln!("{warning}");
             }
             return Ok(());
         }
@@ -394,9 +389,24 @@ async fn print_transcript(
     }
 }
 
+fn turn_outcome(last: Turn) -> Result<Option<String>> {
+    match last {
+        Turn::FailedTurn(failed) => bail!(
+            "turn {} failed with {}: {}",
+            *failed.turn_id,
+            failed.reason,
+            failed.detail
+        ),
+        Turn::CompletedTurn(completed) => Ok(completed
+            .warning
+            .map(|warning| format!("turn {} completed with a warning: {}", *completed.turn_id, *warning))),
+        _ => Ok(None),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{headed_lines, spend, Spent};
+    use super::{headed_lines, spend, turn_outcome, Spent};
     use std::num::NonZeroU32;
     use tumpel_api::types::EntityId;
 
@@ -458,6 +468,37 @@ mod tests {
                 "turn 01J00000000000000000000003",
                 "nothing left to do"
             ]
+        );
+    }
+
+    #[test]
+    fn a_followed_transcript_ends_with_a_completed_turn_warning_and_fails_on_a_failed_turn() {
+        let turn = |extra: serde_json::Value| -> tumpel_api::types::Turn {
+            let mut read = serde_json::json!({
+                "turnId": "turn-1", "tenantId": "tenant-1", "sessionId": "session-1", "boxId": "box-1",
+                "prompt": "build", "lineCount": 1, "createdAt": 1, "updatedAt": 2,
+            });
+            read.as_object_mut()
+                .expect("an object")
+                .extend(extra.as_object().expect("an object").clone());
+            serde_json::from_value(read).expect("a turn")
+        };
+        let warning = "the box disk of 32096 MiB is full, 12 MiB free; give the persona a larger boxDiskMib";
+        assert_eq!(
+            turn_outcome(turn(serde_json::json!({ "state": "Completed", "warning": warning }))).expect("completed"),
+            Some(format!("turn turn-1 completed with a warning: {warning}"))
+        );
+        assert_eq!(
+            turn_outcome(turn(serde_json::json!({ "state": "Completed" }))).expect("completed"),
+            None
+        );
+        let failed = turn_outcome(turn(serde_json::json!({
+            "state": "Failed", "reason": "BoxDiskFull", "detail": warning, "failedAt": "2026-11-18T10:00:00+00:00",
+        })))
+        .expect_err("a failed turn fails the read");
+        assert_eq!(
+            failed.to_string(),
+            format!("turn turn-1 failed with BoxDiskFull: {warning}")
         );
     }
 }
