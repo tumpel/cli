@@ -1,0 +1,16 @@
+{
+  "name": "tumpel",
+  "description": "Tells Claude when a tumpel turn ends, a session goes idle, a host goes offline or a prebuild finishes, through the signed-in tumpel CLI",
+  "author": {
+    "name": "tumpel"
+  },
+  "experimental": {
+    "monitors": [
+      {
+        "name": "tenant-events",
+        "command": "tumpel events follow --event TurnCompleted --event TurnFailed --event SessionIdle --event HostOffline --event PrebuildDone --event PrebuildFailed",
+        "description": "tumpel turns ending, sessions going idle, hosts going offline and prebuilds finishing"
+      }
+    ]
+  }
+}

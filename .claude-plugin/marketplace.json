@@ -1,0 +1,12 @@
+{
+  "name": "tumpel",
+  "description": "Claude Code plugins for tumpel",
+  "owner": { "name": "tumpel" },
+  "plugins": [
+    {
+      "name": "tumpel",
+      "source": "./plugins/tumpel",
+      "description": "Tells Claude when a tumpel turn ends, a session goes idle, a host goes offline or a prebuild finishes"
+    }
+  ]
+}

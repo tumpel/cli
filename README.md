@@ -27,6 +27,17 @@ tumpel whoami
 
 `tumpel --help` lists every command.
 
+## Claude Code plugin
+
+The `tumpel` plugin tells Claude Code when a turn ends, a session goes idle, a host goes offline or a prebuild finishes. It runs `tumpel events follow` for the whole session, so install the CLI and sign in first. Add it from Claude Code:
+
+```text
+/plugin marketplace add tumpel/cli
+/plugin install tumpel@tumpel
+```
+
+The plugin starts in interactive sessions only.
+
 ## Development
 
 ```sh
