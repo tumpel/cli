@@ -486,10 +486,13 @@ enum SessionCommand {
         /// The sessionId tumpel session list prints.
         session_id: String,
     },
-    /// Stop a session with no turn running: its host snapshots it and frees its box.
+    /// Stop a session: its host snapshots it and frees its box. Refused while a turn runs, unless --cancel-turn is given.
     Stop {
         /// The sessionId tumpel session list prints.
         session_id: String,
+        /// End the running turn at once: it fails Cancelled, and the host snapshots and frees the box.
+        #[arg(long)]
+        cancel_turn: bool,
     },
     /// Archive idle, stopped or failed sessions: discard an idle session's box, delete its snapshots, keep its transcript and refuse later sends.
     Archive {

@@ -78,11 +78,15 @@ pub async fn session(command: SessionCommand) -> Result<()> {
                 format!("{endpoint}/v1/sessions/{session_id}/stop-failures")
             })?)
         }
-        SessionCommand::Stop { session_id } => {
+        SessionCommand::Stop {
+            session_id,
+            cancel_turn,
+        } => {
             let session = id("sessionId", &session_id)?;
-            print_json(&shown(client.sessions_stop(&session, None).await, || {
-                format!("{endpoint}/v1/sessions/{session_id}/stop")
-            })?)
+            print_json(&shown(
+                client.sessions_stop(&session, cancel_turn.then_some(true)).await,
+                || format!("{endpoint}/v1/sessions/{session_id}/stop"),
+            )?)
         }
         SessionCommand::Archive {
             session_ids,
