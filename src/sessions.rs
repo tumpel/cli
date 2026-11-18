@@ -7,7 +7,7 @@ use reqwest::StatusCode;
 use std::num::NonZeroU32;
 use std::str::FromStr;
 use std::time::Duration;
-use tumpel_api::types::{EntityId, SessionStart, SessionStartFromIssue, SessionState, TranscriptPage, TurnSend};
+use tumpel_api::types::{EntityId, SessionStart, SessionStartFromIssue, SessionState, TranscriptPage, Turn, TurnSend};
 use tumpel_api::{Client, Error};
 
 const FIRST_BACKOFF: Duration = Duration::from_millis(250);
@@ -80,7 +80,7 @@ pub async fn session(command: SessionCommand) -> Result<()> {
         }
         SessionCommand::Stop { session_id } => {
             let session = id("sessionId", &session_id)?;
-            print_json(&shown(client.sessions_stop(&session).await, || {
+            print_json(&shown(client.sessions_stop(&session, None).await, || {
                 format!("{endpoint}/v1/sessions/{session_id}/stop")
             })?)
         }
@@ -106,7 +106,7 @@ pub async fn session(command: SessionCommand) -> Result<()> {
                 .map(|value| parsed::<SessionState>("--state", &value))
                 .transpose()?;
             let host = host_id.map(|value| id("--host-id", &value)).transpose()?;
-            print_json(&shown(client.sessions_list(host.as_ref(), state).await, || {
+            print_json(&shown(client.sessions_list(host.as_ref(), None, state).await, || {
                 format!("{endpoint}/v1/sessions")
             })?)
         }
@@ -120,6 +120,7 @@ pub async fn turn(command: TurnCommand) -> Result<()> {
         TurnCommand::Send { session_id, prompt } => {
             let session = id("sessionId", &session_id)?;
             let body = TurnSend {
+                goal: None,
                 prompt: parsed("--prompt", &prompt)?,
             };
             print_json(&shown(client.turns_send(&session, &body).await, || {
@@ -188,10 +189,14 @@ pub async fn transcript(command: TranscriptCommand) -> Result<()> {
     let endpoint = credentials.endpoint;
     let TranscriptCommand::Read { turn_id, read } = command;
     let turn = id("turnId", &turn_id)?;
-    let session = answered(client.turns_get(&turn).await, || {
+    let session = match answered(client.turns_get(&turn).await, || {
         format!("{endpoint}/v1/turns/{turn_id}")
-    })?
-    .session_id;
+    })? {
+        Turn::OfferedTurn(read) => read.session_id,
+        Turn::RunningTurn(read) => read.session_id,
+        Turn::CompletedTurn(read) => read.session_id,
+        Turn::FailedTurn(read) => read.session_id,
+    };
     print_transcript(&client, &endpoint, session, Some(turn), read).await
 }
 

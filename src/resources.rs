@@ -9,10 +9,11 @@ use serde::de::DeserializeOwned;
 use std::io::{IsTerminal, Read};
 use std::path::{Path, PathBuf};
 use tumpel_api::types::{
-    ApiKeyValue, ApiKeyValueKind, ConfigSecretSet, EntityId, Harness, HarnessPinCreate, HostLabels, PersonaCreate,
-    PersonaFileWrite, PersonaUpdate, SecretSetCreate, SecretSetUpdate, SecretText, SecretValue, SecretVariableValue,
-    SecretVariableValueKind, StoredPersonaFile, StoredPersonaFileSource, SubscriptionTokenValue,
-    SubscriptionTokenValueKind, SupervisorUpdateLatestStep, SupervisorUpdatePhase,
+    ApiKeyValue, ApiKeyValueKind, ConfigSecretSet, EntityId, Harness, HarnessPinCreate, HostLabels, InlinePersonaFile,
+    InlinePersonaFileSource, PersonaCreate, PersonaFile, PersonaFileWrite, PersonaUpdate, SecretSetCreate,
+    SecretSetUpdate, SecretText, SecretValue, SecretVariableValue, SecretVariableValueKind, StoredPersonaFile,
+    StoredPersonaFileSource, SubscriptionTokenValue, SubscriptionTokenValueKind, SupervisorUpdateLatestStep,
+    SupervisorUpdatePhase,
 };
 use tumpel_api::Client;
 
@@ -119,14 +120,20 @@ async fn persona_update(client: &Client, url: &str, id: &EntityId, change: Perso
         current
             .files
             .into_iter()
-            .map(|held| {
-                StoredPersonaFile {
+            .map(|held| match held {
+                PersonaFile::InlinePersonaFileRead(held) => InlinePersonaFile {
+                    content: held.content,
+                    path: held.path,
+                    source: InlinePersonaFileSource::Inline,
+                }
+                .into(),
+                PersonaFile::StoredPersonaFileRead(held) => StoredPersonaFile {
                     digest: held.digest,
                     path: held.path,
                     size_bytes: held.size_bytes,
                     source: StoredPersonaFileSource::Stored,
                 }
-                .into()
+                .into(),
             })
             .collect()
     } else {
