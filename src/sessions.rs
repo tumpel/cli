@@ -124,11 +124,15 @@ pub async fn turn(command: TurnCommand) -> Result<()> {
     let (credentials, client) = signed_in()?;
     let endpoint = credentials.endpoint;
     match command {
-        TurnCommand::Send { session_id, prompt } => {
+        TurnCommand::Send {
+            session_id,
+            prompt,
+            goal,
+        } => {
             let session = id("sessionId", &session_id)?;
             let body = TurnSend {
-                goal: None,
                 prompt: parsed("--prompt", &prompt)?,
+                goal: goal.map(|value| parsed("--goal", &value)).transpose()?,
             };
             print_json(&shown(client.turns_send(&session, &body).await, || {
                 format!("{endpoint}/v1/sessions/{session_id}/turns")

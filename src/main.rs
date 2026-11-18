@@ -538,6 +538,9 @@ enum TurnCommand {
         /// The prompt.
         #[arg(long)]
         prompt: String,
+        /// When the work is done: the harness keeps working until this holds. See tumpel harness list for which harnesses take a goal.
+        #[arg(long)]
+        goal: Option<String>,
     },
     /// Show one turn with the image its box boots.
     Get {
