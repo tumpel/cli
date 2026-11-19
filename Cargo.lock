@@ -2106,7 +2106,7 @@ dependencies = [
 [[package]]
 name = "tumpel-api"
 version = "0.20.1"
-source = "git+https://github.com/tumpel/protocol?branch=feat%2Fsteer-running-turn#52e5f27c85b9c9380365347a2a420179509733d5"
+source = "git+https://github.com/tumpel/protocol?tag=v0.21.0-rc.14#c7c739eada92771f813829f495ef544f8acb9339"
 dependencies = [
  "chrono",
  "progenitor-client",
