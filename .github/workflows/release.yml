@@ -2,56 +2,84 @@ name: release
 
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
 
 concurrency:
   group: release
   cancel-in-progress: false
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: never
+  TARGET: x86_64-unknown-linux-gnu
+  SHIPPED: src Cargo.toml Cargo.lock build.rs release_version.rs
 
 jobs:
-  release:
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: convco@0.7.2
+
+      - id: plan
+        name: Name the release candidate when a shipped file changed since the newest tag
+        run: |
+          set -f
+          stable=$(convco version --ignore-prereleases)
+          next=$(convco version --bump --ignore-prereleases $(printf -- '-P %s ' $SHIPPED))
+          nearest=$(git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude 'v*-main.*')
+          if [ "$next" = "$stable" ] || git diff --quiet "$nearest" HEAD -- $SHIPPED; then
+            echo "release: nothing shipped needs a new version since $nearest" >&2
+            echo "version=" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=$next-rc.$(git rev-list --count "v$stable..HEAD")" | tee -a "$GITHUB_OUTPUT"
+          fi
+
+  candidate:
+    needs: plan
+    if: needs.plan.outputs.version != ''
+    permissions:
+      contents: write
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    env:
+      TUMPEL_RELEASE_VERSION: ${{ needs.plan.outputs.version }}
+      TUMPEL_TARGET: x86_64-unknown-linux-gnu
+      TAG: v${{ needs.plan.outputs.version }}
     steps:
       - uses: actions/checkout@v7
 
       - name: Install the pinned Rust toolchain
         run: rustup toolchain install
 
-      - name: Check that the tag matches the crate version
-        run: |
-          version=$(sed -n '0,/^version = /s/^version = "\(.*\)"$/\1/p' Cargo.toml)
-          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
-            echo "the tag is $GITHUB_REF_NAME but Cargo.toml names version $version; set the package version to match and tag again" >&2
-            exit 1
-          fi
-          echo "TUMPEL_RELEASE_VERSION=$version" >> "$GITHUB_ENV"
-
       - name: Build the static x86_64 binary
-        env:
-          TUMPEL_TARGET: x86_64-unknown-linux-gnu
         run: npm run build:static
 
       - name: Stage the binary and its sha256
         run: |
           mkdir dist
-          cp target/x86_64-unknown-linux-gnu/release/tumpel dist/tumpel-x86_64-linux
+          cp "target/$TARGET/release/tumpel" dist/tumpel-x86_64-linux
           cd dist
           sha256sum tumpel-x86_64-linux > tumpel-x86_64-linux.sha256
           ./tumpel-x86_64-linux --version
 
-      - name: Create the GitHub release with the binary and its sha256
+      - name: Publish the GitHub pre-release with the binary and its sha256
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --title "$GITHUB_REF_NAME" --generate-notes
-
-      - name: Publish tumpel to crates.io
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: cargo publish
+        run: |
+          draft=$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null || echo none)
+          case "$draft" in
+            none) gh release create "$TAG" dist/* --title "$TAG" --generate-notes --target "$GITHUB_SHA" --prerelease --latest=false ;;
+            true) gh release upload "$TAG" dist/* --clobber && gh release edit "$TAG" --draft=false --prerelease --latest=false ;;
+            *) echo "release: $TAG is already published; its binary stays as it is" >&2; exit 1 ;;
+          esac
