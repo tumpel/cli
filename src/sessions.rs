@@ -103,6 +103,7 @@ pub async fn session(command: SessionCommand) -> Result<()> {
             state,
             last_turn_before,
         } => archive(&client, &endpoint, &session_ids, state, last_turn_before).await,
+        SessionCommand::Delete { session_id } => delete(&client, &endpoint, &session_id).await,
         SessionCommand::Handovers { session_id } => {
             let session = id("sessionId", &session_id)?;
             print_json(&shown(
@@ -208,6 +209,15 @@ pub async fn snapshot(command: SnapshotCommand) -> Result<()> {
             })?)
         }
     }
+}
+
+async fn delete(client: &Client, endpoint: &str, session_id: &str) -> Result<()> {
+    let session = id("sessionId", session_id)?;
+    answered(client.sessions_delete(&session).await, || {
+        format!("{endpoint}/v1/sessions/{session_id}")
+    })?;
+    eprintln!("deleted session {session_id}");
+    Ok(())
 }
 
 async fn archive(
