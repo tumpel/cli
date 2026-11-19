@@ -103,7 +103,7 @@ enum Command {
         #[command(subcommand)]
         command: ConfigCommand,
     },
-    /// Start, get, list, stop or archive sessions, and print what their turns wrote.
+    /// Start, get, list, stop, archive or delete sessions, and print what their turns wrote.
     Session {
         #[command(subcommand)]
         command: SessionCommand,
@@ -377,7 +377,7 @@ enum PersonaCommand {
         #[command(flatten)]
         change: PersonaFileChange,
     },
-    /// Delete a persona.
+    /// Delete a persona and its files.
     Delete {
         /// The `personaId` that tumpel persona list prints.
         persona_id: String,
@@ -691,6 +691,11 @@ enum SessionCommand {
         /// Archive every session whose latest turn last changed state at or before this time, such as 2026-11-17T12:00:00Z.
         #[arg(long)]
         last_turn_before: Option<String>,
+    },
+    /// Delete an idle, stopped, failed or archived session and everything stored for it: its turns, transcript and snapshots.
+    Delete {
+        /// The sessionId tumpel session list prints.
+        session_id: String,
     },
     /// List the credential handovers of a session, oldest first: variable names, never values.
     Handovers {
