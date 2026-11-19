@@ -7,6 +7,7 @@ Always follow `rules/errors.md` and `rules/coding-standards.md`.
 - When committing or opening a pull request, follow `rules/commits-and-prs.md`.
 - When writing text a user reads, docs, an issue or a PR body, follow `rules/writing.md`.
 - Decode a response the CLI only prints with `shown`, so an answer from an older control plane that lacks a newer field still prints.
+- Consume a tumpel/protocol release candidate as a Cargo git dependency on `https://github.com/tumpel/protocol`, pinned to its exact `vX.Y.Z-rc.N` tag. The `promote` workflow switches it to the exact crates.io `X.Y.Z` version before `cargo publish`.
 
 ## Commands
 
