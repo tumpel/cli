@@ -377,7 +377,7 @@ enum PersonaCommand {
         #[command(flatten)]
         change: PersonaFileChange,
     },
-    /// Delete a persona and its files; refused while any session of the persona remains, naming those sessions.
+    /// Delete a persona and its files.
     Delete {
         /// The `personaId` that tumpel persona list prints.
         persona_id: String,
