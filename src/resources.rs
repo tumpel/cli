@@ -1,19 +1,21 @@
 use crate::sessions::{parsed, retention};
 use crate::tenant_config;
 use crate::{
-    answered, print_json, shown, signed_in, HarnessCommand, PersonaCommand, PersonaFields, SecretMemberCommand,
-    SecretSetCommand,
+    answered, print_json, shown, signed_in, HarnessCommand, PersonaCommand, PersonaFields, PersonaFileChange,
+    PersonaPatchFields, SecretMemberCommand, SecretSetCommand,
 };
 use anyhow::{anyhow, bail, Context, Result};
 use serde::de::DeserializeOwned;
 use std::io::{IsTerminal, Read};
 use std::path::{Path, PathBuf};
 use tumpel_api::types::{
-    ApiKeyValue, ApiKeyValueKind, ConfigSecretSet, EntityId, Harness, HarnessPinCreate, HostLabels, InlinePersonaFile,
-    InlinePersonaFileSource, PersonaCreate, PersonaFile, PersonaFileWrite, PersonaUpdate, SecretSetCreate,
-    SecretSetUpdate, SecretText, SecretValue, SecretVariableValue, SecretVariableValueKind, StoredPersonaFile,
-    StoredPersonaFileSource, SubscriptionTokenValue, SubscriptionTokenValueKind, SupervisorUpdateLatestStep,
-    SupervisorUpdatePhase,
+    ApiKeyValue, ApiKeyValueKind, ConfigSecretSet, EditPersonaFilePatch, EditPersonaFilePatchKind, EntityId, Harness,
+    HarnessPinCreate, HostLabel, HostLabels, HostLabelsPatch, InlinePersonaFile, InlinePersonaFileSource,
+    PersonaCreate, PersonaFile, PersonaFilePatch, PersonaFileWrite, PersonaPatch, PersonaUpdate, PutPersonaFilePatch,
+    PutPersonaFilePatchKind, RemovePersonaFilePatch, RemovePersonaFilePatchKind, SecretMemberUpdate, SecretSetCreate,
+    SecretSetPatch, SecretSetUpdate, SecretText, SecretValue, SecretVariableValue, SecretVariableValueKind,
+    StoredPersonaFile, StoredPersonaFileSource, SubscriptionTokenValue, SubscriptionTokenValueKind,
+    SupervisorUpdateLatestStep, SupervisorUpdatePhase,
 };
 use tumpel_api::Client;
 
@@ -76,14 +78,17 @@ pub fn read_stdin(stdin: bool, name: &str) -> Result<SecretText> {
     stdin_value(&text, name)
 }
 
+async fn persona_file_spec(client: &Client, flag: &str, spec: &str, rerun: &str) -> Result<PersonaFileWrite> {
+    let (path, local) = spec
+        .split_once('=')
+        .ok_or_else(|| anyhow!("{flag} {spec:?} is not <path in the harness home>=<local file>"))?;
+    crate::bundle::persona_file(client, parsed(flag, path)?, &PathBuf::from(local), rerun).await
+}
+
 async fn persona_files(client: &Client, specs: &[String], rerun: &str) -> Result<Vec<PersonaFileWrite>> {
     let mut files = Vec::with_capacity(specs.len());
     for spec in specs {
-        let (path, local) = spec
-            .split_once('=')
-            .ok_or_else(|| anyhow!("--persona-file {spec:?} is not <path in the harness home>=<local file>"))?;
-        let path = parsed("--persona-file", path)?;
-        files.push(crate::bundle::persona_file(client, path, &PathBuf::from(local), rerun).await?);
+        files.push(persona_file_spec(client, "--persona-file", spec, rerun).await?);
     }
     Ok(files)
 }
@@ -172,6 +177,72 @@ async fn persona_update(client: &Client, url: &str, id: &EntityId, change: Perso
     })
 }
 
+fn persona_patch(fields: PersonaPatchFields) -> Result<PersonaPatch> {
+    Ok(PersonaPatch {
+        box_disk_mib: fields.box_disk_mib,
+        box_memory_mib: fields.box_memory_mib,
+        box_retention: retention(fields.box_retention.as_deref())?,
+        connector_ids: connector_ids(&fields.connector)?,
+        name: fields.name.map(|name| parsed("--name", &name)).transpose()?,
+        secret_set_id: fields
+            .secret_set_id
+            .map(|raw| entity_id(&raw, "secret set"))
+            .transpose()?,
+    })
+}
+
+async fn persona_file_patch(client: &Client, change: PersonaFileChange) -> Result<PersonaFilePatch> {
+    let PersonaFileChange {
+        put,
+        remove,
+        edit,
+        old_text,
+        new_text,
+    } = change;
+    if let Some(put) = put {
+        return Ok(PutPersonaFilePatch {
+            file: persona_file_spec(client, "--put", &put, "tumpel persona patch-file").await?,
+            kind: PutPersonaFilePatchKind::Put,
+        }
+        .into());
+    }
+    if let Some(path) = remove {
+        return Ok(RemovePersonaFilePatch {
+            kind: RemovePersonaFilePatchKind::Remove,
+            path: parsed("--remove", &path)?,
+        }
+        .into());
+    }
+    Ok(EditPersonaFilePatch {
+        kind: EditPersonaFilePatchKind::Edit,
+        new_text: new_text.unwrap_or_default(),
+        old_text: parsed("--old-text", &old_text.unwrap_or_default())?,
+        path: parsed("--edit", &edit.unwrap_or_default())?,
+    }
+    .into())
+}
+
+fn kept_members(secret_set: &ConfigSecretSet) -> Result<Vec<SecretMemberUpdate>> {
+    tenant_config::with_kept_values(
+        secret_set,
+        &tenant_config::secret_values([secret_set], |name| std::env::var(name).ok()),
+    )
+}
+
+fn secret_set_patch(file: Option<PathBuf>, name: Option<String>) -> Result<SecretSetPatch> {
+    let Some(file) = file else {
+        return Ok(SecretSetPatch {
+            name: Some(parsed("--name", &name.unwrap_or_default())?),
+            secrets: Vec::new(),
+        });
+    };
+    let secret_set: ConfigSecretSet = read_json(&file, "ConfigSecretSet")?;
+    Ok(SecretSetPatch {
+        name: Some(secret_set.name.clone()),
+        secrets: kept_members(&secret_set)?,
+    })
+}
+
 pub async fn host_get(host_id: String) -> Result<()> {
     let (credentials, client) = signed_in()?;
     let id = entity_id(&host_id, "host")?;
@@ -190,21 +261,37 @@ pub async fn host_get(host_id: String) -> Result<()> {
     Ok(())
 }
 
+fn host_labels(labels: Vec<String>) -> Result<Vec<HostLabel>> {
+    labels
+        .into_iter()
+        .map(|label| {
+            label
+                .clone()
+                .try_into()
+                .map_err(|error| anyhow!("{label:?} is not a host label: {error}"))
+        })
+        .collect()
+}
+
 pub async fn host_set_labels(host_id: String, labels: Vec<String>) -> Result<()> {
     let (credentials, client) = signed_in()?;
     let id = entity_id(&host_id, "host")?;
     let body = HostLabels {
-        labels: labels
-            .into_iter()
-            .map(|label| {
-                label
-                    .clone()
-                    .try_into()
-                    .map_err(|error| anyhow!("{label:?} is not a host label: {error}"))
-            })
-            .collect::<Result<_>>()?,
+        labels: host_labels(labels)?,
     };
     print_json(&shown(client.hosts_set_labels(&id, &body).await, || {
+        format!("{}/v1/hosts/{host_id}/labels", credentials.endpoint)
+    })?)
+}
+
+pub async fn host_patch_labels(host_id: String, add: Vec<String>, remove: Vec<String>) -> Result<()> {
+    let (credentials, client) = signed_in()?;
+    let id = entity_id(&host_id, "host")?;
+    let body = HostLabelsPatch {
+        add: host_labels(add)?,
+        remove: host_labels(remove)?,
+    };
+    print_json(&shown(client.hosts_patch_labels(&id, &body).await, || {
         format!("{}/v1/hosts/{host_id}/labels", credentials.endpoint)
     })?)
 }
@@ -297,6 +384,20 @@ pub async fn personas(command: PersonaCommand) -> Result<()> {
             };
             print_json(&shown(client.personas_update(&id, &body).await, || url)?)
         }
+        PersonaCommand::Patch { persona_id, fields } => {
+            let id = entity_id(&persona_id, "persona")?;
+            print_json(&shown(
+                client.personas_patch(&id, &persona_patch(fields)?).await,
+                || format!("{endpoint}/v1/personas/{persona_id}"),
+            )?)
+        }
+        PersonaCommand::PatchFile { persona_id, change } => {
+            let id = entity_id(&persona_id, "persona")?;
+            let body = persona_file_patch(&client, change).await?;
+            print_json(&shown(client.personas_patch_file(&id, &body).await, || {
+                format!("{endpoint}/v1/personas/{persona_id}/file-patches")
+            })?)
+        }
         PersonaCommand::UploadFile { file } => {
             let bytes = std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
             let (digest, size_bytes) = crate::bundle::upload(&client, &bytes, "tumpel persona upload-file").await?;
@@ -311,6 +412,44 @@ pub async fn personas(command: PersonaCommand) -> Result<()> {
             Ok(())
         }
     }
+}
+
+async fn set_member(client: &Client, endpoint: &str, member: SecretMemberCommand) -> Result<()> {
+    let (SecretMemberCommand::Variable { target }
+    | SecretMemberCommand::ApiKey { target, .. }
+    | SecretMemberCommand::SubscriptionToken { target, .. }) = &member;
+    let id = entity_id(&target.secret_set_id, "secret set")?;
+    let url = format!("{endpoint}/v1/secret-sets/{}/members", target.secret_set_id);
+    let name = parsed("--name", &target.name)?;
+    let value = read_stdin(target.stdin, &target.name)?;
+    let body: SecretValue = match member {
+        SecretMemberCommand::Variable { .. } => SecretVariableValue {
+            kind: SecretVariableValueKind::Variable,
+            name,
+            value,
+        }
+        .into(),
+        SecretMemberCommand::ApiKey { provider, .. } => ApiKeyValue {
+            kind: ApiKeyValueKind::ApiKey,
+            name,
+            provider: parsed("--provider", &provider)?,
+            value,
+        }
+        .into(),
+        SecretMemberCommand::SubscriptionToken {
+            provider, expires_at, ..
+        } => SubscriptionTokenValue {
+            expires_at: chrono::DateTime::parse_from_rfc3339(&expires_at).map_err(|error| {
+                anyhow!("--expires-at {expires_at:?} is not an ISO 8601 date-time with an offset ({error})")
+            })?,
+            kind: SubscriptionTokenValueKind::SubscriptionToken,
+            name,
+            provider: parsed("--provider", &provider)?,
+            value,
+        }
+        .into(),
+    };
+    print_json(&shown(client.secret_sets_set_member(&id, &body).await, || url)?)
 }
 
 pub async fn secret_sets(command: SecretSetCommand) -> Result<()> {
@@ -349,52 +488,24 @@ pub async fn secret_sets(command: SecretSetCommand) -> Result<()> {
             let secret_set: ConfigSecretSet = read_json(&file, "ConfigSecretSet")?;
             let body = SecretSetUpdate {
                 name: secret_set.name.clone(),
-                secrets: tenant_config::with_kept_values(
-                    &secret_set,
-                    &tenant_config::secret_values([&secret_set], |name| std::env::var(name).ok()),
-                )?,
+                secrets: kept_members(&secret_set)?,
             };
             print_json(&shown(client.secret_sets_update(&id, &body).await, || {
                 format!("{endpoint}/v1/secret-sets/{secret_set_id}")
             })?)
         }
-        SecretSetCommand::SetMember { command: member } => {
-            let (SecretMemberCommand::Variable { target }
-            | SecretMemberCommand::ApiKey { target, .. }
-            | SecretMemberCommand::SubscriptionToken { target, .. }) = &member;
-            let id = entity_id(&target.secret_set_id, "secret set")?;
-            let url = format!("{endpoint}/v1/secret-sets/{}/members", target.secret_set_id);
-            let name = parsed("--name", &target.name)?;
-            let value = read_stdin(target.stdin, &target.name)?;
-            let body: SecretValue = match member {
-                SecretMemberCommand::Variable { .. } => SecretVariableValue {
-                    kind: SecretVariableValueKind::Variable,
-                    name,
-                    value,
-                }
-                .into(),
-                SecretMemberCommand::ApiKey { provider, .. } => ApiKeyValue {
-                    kind: ApiKeyValueKind::ApiKey,
-                    name,
-                    provider: parsed("--provider", &provider)?,
-                    value,
-                }
-                .into(),
-                SecretMemberCommand::SubscriptionToken {
-                    provider, expires_at, ..
-                } => SubscriptionTokenValue {
-                    expires_at: chrono::DateTime::parse_from_rfc3339(&expires_at).map_err(|error| {
-                        anyhow!("--expires-at {expires_at:?} is not an ISO 8601 date-time with an offset ({error})")
-                    })?,
-                    kind: SubscriptionTokenValueKind::SubscriptionToken,
-                    name,
-                    provider: parsed("--provider", &provider)?,
-                    value,
-                }
-                .into(),
-            };
-            print_json(&shown(client.secret_sets_set_member(&id, &body).await, || url)?)
+        SecretSetCommand::Patch {
+            secret_set_id,
+            file,
+            name,
+        } => {
+            let id = entity_id(&secret_set_id, "secret set")?;
+            let body = secret_set_patch(file, name)?;
+            print_json(&shown(client.secret_sets_patch(&id, &body).await, || {
+                format!("{endpoint}/v1/secret-sets/{secret_set_id}")
+            })?)
         }
+        SecretSetCommand::SetMember { command: member } => set_member(&client, &endpoint, member).await,
         SecretSetCommand::RemoveMember { secret_set_id, name } => {
             let id = entity_id(&secret_set_id, "secret set")?;
             let member = parsed("name", &name)?;

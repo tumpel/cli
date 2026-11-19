@@ -164,6 +164,12 @@ pub async fn turn(command: TurnCommand) -> Result<()> {
                 format!("{endpoint}/v1/sessions/{session_id}/turns")
             })?)
         }
+        TurnCommand::Cancel { turn_id } => {
+            let turn = id("turnId", &turn_id)?;
+            print_json(&shown(client.turns_cancel(&turn).await, || {
+                format!("{endpoint}/v1/turns/{turn_id}/cancel")
+            })?)
+        }
         TurnCommand::Failure { turn_id } => {
             let turn = id("turnId", &turn_id)?;
             print_json(&shown(client.turns_get_failure(&turn).await, || {

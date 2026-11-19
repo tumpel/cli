@@ -265,6 +265,18 @@ enum HostCommand {
         /// The labels, such as gpu or region-eu.
         labels: Vec<String>,
     },
+    /// Add and remove labels of a host; every other label stays.
+    #[command(group(ArgGroup::new("change").required(true).multiple(true).args(["add", "remove"])))]
+    PatchLabels {
+        /// The `hostId` that tumpel host list prints.
+        host_id: String,
+        /// A label to add, such as gpu; repeat it for each label.
+        #[arg(long)]
+        add: Vec<String>,
+        /// A label to remove; repeat it for each label.
+        #[arg(long)]
+        remove: Vec<String>,
+    },
     /// Revoke a host: its channel closes and it cannot connect again.
     Revoke {
         /// The `hostId` that tumpel host list prints.
@@ -348,6 +360,22 @@ enum PersonaCommand {
         /// What happens to a session's box after each turn: Off, Warm or Auto; left out, the mode stays.
         #[arg(long, value_name = "Off|Warm|Auto")]
         box_retention: Option<String>,
+    },
+    /// Change the persona fields its flags name; every other field and every file stays.
+    #[command(group(ArgGroup::new("change").required(true).multiple(true).args(["name", "secret_set_id", "connector", "box_memory_mib", "box_disk_mib", "box_retention"])))]
+    Patch {
+        /// The `personaId` that tumpel persona list prints.
+        persona_id: String,
+        #[command(flatten)]
+        fields: PersonaPatchFields,
+    },
+    /// Change one file of a persona: --put adds or replaces it, --remove deletes it, --edit replaces the one occurrence of --old-text in it with --new-text. Every other file stays.
+    #[command(group(ArgGroup::new("change").required(true).args(["put", "remove", "edit"])))]
+    PatchFile {
+        /// The `personaId` that tumpel persona list prints.
+        persona_id: String,
+        #[command(flatten)]
+        change: PersonaFileChange,
     },
     /// Delete a persona.
     Delete {
@@ -447,6 +475,17 @@ enum SecretSetCommand {
         #[arg(long)]
         file: PathBuf,
     },
+    /// Rename a secret set with --name, or set its name and the members a `ConfigSecretSet` JSON file lists; a member the file leaves out keeps its value, and so does a listed member whose variable is unset.
+    Patch {
+        /// The `secretSetId` that tumpel secret-set list prints.
+        secret_set_id: String,
+        /// The `ConfigSecretSet` JSON file.
+        #[arg(long, required_unless_present = "name", conflicts_with = "name")]
+        file: Option<PathBuf>,
+        /// The new secret set name.
+        #[arg(long)]
+        name: Option<String>,
+    },
     /// Delete a secret set and its stored values; refused while a persona names it.
     Delete {
         /// The `secretSetId` that tumpel secret-set list prints.
@@ -464,6 +503,47 @@ enum SecretSetCommand {
         /// The member name tumpel secret-set get prints.
         name: String,
     },
+}
+
+#[derive(Args)]
+struct PersonaPatchFields {
+    /// The new persona name.
+    #[arg(long)]
+    name: Option<String>,
+    /// The `secretSetId` of the secret set it runs on.
+    #[arg(long)]
+    secret_set_id: Option<String>,
+    /// The `connectorId` of a connector every session of the persona reaches; repeat it for each connector. It replaces the whole list.
+    #[arg(long = "connector", value_name = "CONNECTOR_ID")]
+    connector: Vec<String>,
+    /// The memory in MiB of each box the persona's sessions boot, from 512 up to 65536.
+    #[arg(long)]
+    box_memory_mib: Option<i32>,
+    /// The disk in MiB of each box the persona's sessions boot, from 32768 up to 262144.
+    #[arg(long)]
+    box_disk_mib: Option<i32>,
+    /// What happens to a session's box after each turn: Off, Warm or Auto.
+    #[arg(long, value_name = "Off|Warm|Auto")]
+    box_retention: Option<String>,
+}
+
+#[derive(Args)]
+struct PersonaFileChange {
+    /// The file as `<path in the harness home>=<local file>`.
+    #[arg(long, value_name = "PATH=LOCAL")]
+    put: Option<String>,
+    /// The path in the harness home of the file to delete.
+    #[arg(long, value_name = "PATH")]
+    remove: Option<String>,
+    /// The path in the harness home of the file to edit.
+    #[arg(long, value_name = "PATH", requires_all = ["old_text", "new_text"])]
+    edit: Option<String>,
+    /// The text to replace; it occurs once in the file.
+    #[arg(long, requires = "edit")]
+    old_text: Option<String>,
+    /// The text that replaces it.
+    #[arg(long, requires = "edit")]
+    new_text: Option<String>,
 }
 
 #[derive(Args)]
@@ -674,7 +754,7 @@ enum EventsCommand {
 
 #[derive(Subcommand)]
 enum TurnCommand {
-    /// Send a session its next prompt; refused while another turn of it runs.
+    /// Send a session its next prompt; while another turn of it runs, the new turn waits and starts when the turns before it end.
     Send {
         /// The sessionId tumpel session list prints.
         session_id: String,
@@ -694,6 +774,11 @@ enum TurnCommand {
     List {
         /// The sessionId tumpel session list prints.
         session_id: String,
+    },
+    /// Cancel a turn that waits behind another turn of its session: it fails Cancelled, and the turns behind it keep their order.
+    Cancel {
+        /// The turnId tumpel turn send prints.
+        turn_id: String,
     },
     /// Show why a Failed turn failed.
     Failure {
@@ -1379,6 +1464,7 @@ async fn host(command: HostCommand) -> Result<()> {
         })?),
         HostCommand::Get { host_id } => resources::host_get(host_id).await,
         HostCommand::SetLabels { host_id, labels } => resources::host_set_labels(host_id, labels).await,
+        HostCommand::PatchLabels { host_id, add, remove } => resources::host_patch_labels(host_id, add, remove).await,
         HostCommand::Revoke { host_id } => {
             let id = host_id
                 .clone()
