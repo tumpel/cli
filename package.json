@@ -14,7 +14,6 @@
     "fmt:check": "cargo fmt --check",
     "check": "npm run comments:check && npm run secrets:check && npm run clippy && npm run fmt:check",
     "test": "cargo test",
-    "build:static": "RUSTFLAGS=\"-C target-feature=+crt-static\" cargo build --release --target ${TUMPEL_TARGET:-x86_64-unknown-linux-gnu}",
-    "prepare": "git config core.hooksPath .githooks"
+    "build:static": "RUSTFLAGS=\"-C target-feature=+crt-static\" cargo build --release --target ${TUMPEL_TARGET:-x86_64-unknown-linux-gnu}"
   }
 }
