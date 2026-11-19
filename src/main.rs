@@ -674,7 +674,7 @@ enum EventsCommand {
 
 #[derive(Subcommand)]
 enum TurnCommand {
-    /// Send a session its next prompt; refused while another turn of it runs.
+    /// Send a session its next prompt; while another turn of it runs, the new turn waits and starts when the turns before it end.
     Send {
         /// The sessionId tumpel session list prints.
         session_id: String,
