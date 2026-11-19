@@ -8,7 +8,8 @@ use std::num::NonZeroU32;
 use std::str::FromStr;
 use std::time::Duration;
 use tumpel_api::types::{
-    BoxRetention, EntityId, SessionStart, SessionStartFromIssue, SessionState, TranscriptPage, Turn, TurnSend,
+    BoxRetention, EntityId, SessionStart, SessionStartFromIssue, SessionState, SteerCreate, TranscriptPage, Turn,
+    TurnSend,
 };
 use tumpel_api::{Client, Error};
 
@@ -169,6 +170,21 @@ pub async fn turn(command: TurnCommand) -> Result<()> {
             let turn = id("turnId", &turn_id)?;
             print_json(&shown(client.turns_cancel(&turn).await, || {
                 format!("{endpoint}/v1/turns/{turn_id}/cancel")
+            })?)
+        }
+        TurnCommand::Steer { turn_id, prompt } => {
+            let turn = id("turnId", &turn_id)?;
+            let body = SteerCreate {
+                prompt: parsed("--prompt", &prompt)?,
+            };
+            print_json(&shown(client.turns_steer(&turn, &body).await, || {
+                format!("{endpoint}/v1/turns/{turn_id}/steers")
+            })?)
+        }
+        TurnCommand::ListSteers { turn_id } => {
+            let turn = id("turnId", &turn_id)?;
+            print_json(&shown(client.turns_list_steers(&turn).await, || {
+                format!("{endpoint}/v1/turns/{turn_id}/steers")
             })?)
         }
         TurnCommand::Failure { turn_id } => {

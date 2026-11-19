@@ -785,6 +785,19 @@ enum TurnCommand {
         /// The turnId tumpel turn send prints.
         turn_id: String,
     },
+    /// Send a prompt into a running turn: the harness reads it after its next tool call, or before it would end the turn, and keeps working inside the same turn.
+    Steer {
+        /// The turnId tumpel turn send prints.
+        turn_id: String,
+        /// The prompt.
+        #[arg(long)]
+        prompt: String,
+    },
+    /// List a turn's steers, oldest first, with whether the harness took each one: Pending, Delivered, or ended with the turn.
+    ListSteers {
+        /// The turnId tumpel turn send prints.
+        turn_id: String,
+    },
     /// Show why a Failed turn failed.
     Failure {
         /// The turnId tumpel turn list prints.
