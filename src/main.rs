@@ -780,7 +780,7 @@ enum TurnCommand {
         /// The turnId tumpel turn send prints.
         turn_id: String,
     },
-    /// Send a prompt into a running turn: the harness reads it after its next tool call, or before it would end the turn, and keeps working inside the same turn. Only Claude Code takes a steer.
+    /// Send a prompt into a running turn: the harness reads it after its next tool call, or before it would end the turn, and keeps working inside the same turn.
     Steer {
         /// The turnId tumpel turn send prints.
         turn_id: String,
