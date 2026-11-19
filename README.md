@@ -18,7 +18,16 @@ Or install from crates.io:
 cargo install tumpel
 ```
 
-Each `vX.Y.Z` release on GitHub carries a static Linux binary, `tumpel-x86_64-linux`, and its `.sha256`.
+Each release on GitHub carries a static Linux binary, `tumpel-x86_64-linux`, and its `.sha256`, at `https://github.com/tumpel/cli/releases/download/v<version>/tumpel-x86_64-linux`.
+
+## Releases
+
+Only a change to the crate makes a new version: its sources, `Cargo.toml`, `Cargo.lock` or the build script. Docs, tests, CI and the Claude Code plugin never do. The conventional commits that changed those files since the latest stable tag pick the next version: a breaking change bumps major, `feat` bumps minor, and `fix` or `perf` bumps patch. Other types ride along with the next release.
+
+- Release candidate: a push to `main` with such a change publishes the GitHub pre-release `vX.Y.Z-rc.N` with the binary, where `N` counts the commits since the latest stable tag. A release candidate never touches crates.io.
+- Stable release: a person runs the `promote` workflow and names one release candidate. It tags that commit `vX.Y.Z`, publishes `tumpel` to crates.io and publishes the GitHub release as Latest. To ship several changes together, merge them and promote the last release candidate.
+
+A failed run is rerun as it is and releases the same version: the stable tag is pushed first, a rerun skips a crate already on crates.io and finishes a draft release, and a published release is never overwritten.
 
 ## Sign in
 
