@@ -463,6 +463,7 @@ pub fn starter(live: &Live) -> Result<TenantConfig> {
         .map(|set| (set.secret_set_id.as_str(), set))
         .collect();
     Ok(TenantConfig {
+        triggers: Vec::new(),
         schema: None,
         personas: live
             .personas

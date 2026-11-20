@@ -13,6 +13,7 @@ mod resources;
 mod sessions;
 mod subscriptions;
 mod tenant_config;
+mod triggers;
 
 use anyhow::{bail, Context, Result};
 use clap::{ArgGroup, Args, Parser, Subcommand};
@@ -113,6 +114,11 @@ enum Command {
     Subscription {
         #[command(subcommand)]
         command: SubscriptionCommand,
+    },
+    /// Create, list, get, update, delete or test the triggers that start a session when a GitHub event matches them (Owner only to change).
+    Trigger {
+        #[command(subcommand)]
+        command: TriggerCommand,
     },
     /// Send, get or list a session's turns, and read why one failed; tumpel transcript read prints what a turn wrote.
     Turn {
@@ -760,7 +766,108 @@ enum SessionCommand {
         /// Only sessions that carry this tag; repeat it to keep sessions that carry every tag named.
         #[arg(long = "tag", value_name = "TAG")]
         tag: Vec<String>,
+        /// Only sessions this trigger started.
+        #[arg(long = "trigger", value_name = "TRIGGER_ID")]
+        trigger: Option<String>,
     },
+}
+
+#[derive(Subcommand)]
+enum TriggerCommand {
+    /// List the tenant's triggers.
+    List,
+    /// Show one trigger.
+    Get {
+        /// The `triggerId` that tumpel trigger list prints.
+        trigger_id: String,
+    },
+    /// Create a trigger that runs as you, from a `TriggerCreate` JSON file or from its flags.
+    #[command(group(ArgGroup::new("input").required(true).args(["file", "name"])))]
+    Create {
+        /// The `TriggerCreate` JSON file.
+        #[arg(long, conflicts_with = "TriggerFields")]
+        file: Option<PathBuf>,
+        #[command(flatten)]
+        fields: Option<TriggerFields>,
+    },
+    /// Change the trigger fields a `TriggerPatch` JSON file or the flags name; every other field stays, and the trigger then runs as you.
+    #[command(group(ArgGroup::new("change").required(true).multiple(true).args(["file", "name", "source", "event", "condition", "persona_id", "model", "prompt", "prompt_file"])))]
+    Update {
+        /// The `triggerId` that tumpel trigger list prints.
+        trigger_id: String,
+        /// The `TriggerPatch` JSON file.
+        #[arg(long, conflicts_with_all = ["name", "source", "event", "condition", "persona_id", "model", "prompt", "prompt_file"])]
+        file: Option<PathBuf>,
+        /// The new trigger name.
+        #[arg(long)]
+        name: Option<String>,
+        /// Where the events come from: GitHub.
+        #[arg(long)]
+        source: Option<String>,
+        /// The event type: `pull_request`, `push`, `status` or `issues`.
+        #[arg(long)]
+        event: Option<String>,
+        /// A condition as `<field>=<value>`, repeated as for create; together they replace every condition.
+        #[arg(long = "where", value_name = "FIELD=VALUE")]
+        condition: Vec<String>,
+        /// The `personaId` of every session it starts.
+        #[arg(long)]
+        persona_id: Option<String>,
+        /// The model of every session it starts.
+        #[arg(long)]
+        model: Option<String>,
+        /// The prompt, with `{{field}}` placeholders filled from the event.
+        #[arg(long, conflicts_with = "prompt_file")]
+        prompt: Option<String>,
+        /// A file holding the prompt.
+        #[arg(long)]
+        prompt_file: Option<PathBuf>,
+    },
+    /// Delete a trigger; the sessions it started stay.
+    Delete {
+        /// The `triggerId` that tumpel trigger list prints.
+        trigger_id: String,
+    },
+    /// Match a stored trigger, or a `TriggerCreate` JSON file before you create it, against a webhook payload and print each condition's verdict and the prompt it fills. It starts nothing.
+    #[command(group(ArgGroup::new("trigger").required(true).args(["trigger_id", "file"])))]
+    Test {
+        /// The `triggerId` that tumpel trigger list prints.
+        trigger_id: Option<String>,
+        /// The `TriggerCreate` JSON file.
+        #[arg(long)]
+        file: Option<PathBuf>,
+        /// The webhook payload as JSON, such as one copied from the recent deliveries in your GitHub settings.
+        #[arg(long)]
+        payload_file: PathBuf,
+    },
+}
+
+#[derive(Args)]
+struct TriggerFields {
+    /// The trigger name, unique in the tenant.
+    #[arg(long)]
+    name: String,
+    /// Where the events come from: GitHub.
+    #[arg(long)]
+    source: String,
+    /// The event type: `pull_request`, `push`, `status` or `issues`.
+    #[arg(long)]
+    event: String,
+    /// A condition as `<field>=<value>`, such as `action=closed`, the field a dotted path into the payload. Repeat a field to match any of its values; conditions on different fields must all hold. Left out, every event of the type matches.
+    #[arg(long = "where", value_name = "FIELD=VALUE")]
+    condition: Vec<String>,
+    /// The `personaId` of every session it starts; tumpel persona list prints it.
+    #[arg(long)]
+    persona_id: String,
+    /// The model of every session it starts, one the persona's harness runs.
+    #[arg(long)]
+    model: String,
+    /// The prompt, with `{{field}}` placeholders filled from the event, such as `Review {{pull_request.html_url}}`.
+    #[arg(long, required_unless_present_any = ["prompt_file", "file"], conflicts_with = "prompt_file")]
+    prompt: Option<String>,
+    /// A file holding the prompt.
+    #[arg(long)]
+    prompt_file: Option<PathBuf>,
 }
 
 #[derive(Subcommand)]
@@ -1717,6 +1824,7 @@ fn main() -> ExitCode {
             Command::Config { command } => tenant_config(command).await,
             Command::Session { command } => sessions::session(command).await,
             Command::Subscription { command } => subscriptions::subscription(command).await,
+            Command::Trigger { command } => triggers::trigger(command).await,
             Command::Turn { command } => sessions::turn(command).await,
             Command::Events { command } => events::events(command).await,
             Command::Transcript { command } => sessions::transcript(command).await,
@@ -1750,6 +1858,11 @@ fn main() -> ExitCode {
 mod tests {
     use super::*;
     use tumpel_api::types::Whoami;
+
+    #[test]
+    fn every_command_parses_without_a_clashing_flag_or_group() {
+        <Cli as clap::CommandFactory>::command().debug_assert();
+    }
 
     #[test]
     fn prints_an_answer_that_lacks_a_field_this_cli_expects() {

@@ -25,7 +25,7 @@ pub fn entity_id(raw: &str, what: &str) -> Result<EntityId> {
         .map_err(|error| anyhow!("{raw:?} is not a {what} id: {error}"))
 }
 
-fn read_json<T: DeserializeOwned>(file: &Path, schema: &str) -> Result<T> {
+pub(crate) fn read_json<T: DeserializeOwned>(file: &Path, schema: &str) -> Result<T> {
     let text = std::fs::read_to_string(file).with_context(|| format!("reading {}", file.display()))?;
     serde_json::from_str(&text).with_context(|| {
         format!(
