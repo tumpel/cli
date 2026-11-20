@@ -11,6 +11,7 @@ mod openrouter;
 mod prebuilds;
 mod resources;
 mod sessions;
+mod subscriptions;
 mod tenant_config;
 
 use anyhow::{bail, Context, Result};
@@ -107,6 +108,11 @@ enum Command {
     Session {
         #[command(subcommand)]
         command: SessionCommand,
+    },
+    /// Create, list, get, pause, resume, delete or complete the subscriptions that send a session a turn when its crew records an event.
+    Subscription {
+        #[command(subcommand)]
+        command: SubscriptionCommand,
     },
     /// Send, get or list a session's turns, and read why one failed; tumpel transcript read prints what a turn wrote.
     Turn {
@@ -788,6 +794,68 @@ enum EventsCommand {
         /// Keep events of this session, by the sessionId tumpel session list prints.
         #[arg(long)]
         session_id: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum SubscriptionCommand {
+    /// Create an Active subscription: each listed event of a crew session, one that carries every crew tag, sends the session a turn with the plan and the goal.
+    Create {
+        /// The sessionId tumpel session list prints; its harness must take a goal.
+        #[arg(long)]
+        session_id: String,
+        /// The plan, sent at the top of every turn.
+        #[arg(long)]
+        prompt: String,
+        /// When the work is done; the session completes the subscription once this holds.
+        #[arg(long)]
+        goal: String,
+        /// An event that sends a turn, such as `TurnCompleted`; repeat it for each event.
+        #[arg(long = "event", value_name = "EVENT", required = true)]
+        event: Vec<String>,
+        /// A tag every crew session carries, such as team:payments; repeat it for each tag, up to 16.
+        #[arg(long = "crew-tag", value_name = "TAG")]
+        crew_tag: Vec<String>,
+        /// When the subscription ends, such as 2026-11-21T12:00:00Z.
+        #[arg(long)]
+        expires_at: String,
+    },
+    /// List the tenant's subscriptions.
+    List {
+        /// Only the subscriptions of this session.
+        #[arg(long)]
+        session_id: Option<String>,
+        /// Only subscriptions in this state: Active, Paused or Ended.
+        #[arg(long)]
+        state: Option<String>,
+    },
+    /// Show one subscription with its failure counts and why it is Paused or Ended.
+    Get {
+        /// The subscriptionId tumpel subscription list prints.
+        subscription_id: String,
+    },
+    /// Pause a subscription with a note for whoever resumes it; its events wait until a resume.
+    Pause {
+        /// The subscriptionId tumpel subscription list prints.
+        subscription_id: String,
+        /// The note, such as the decision it waits for.
+        #[arg(long)]
+        message: String,
+    },
+    /// Resume a Paused subscription; the events that waited reach the session.
+    Resume {
+        /// The subscriptionId tumpel subscription list prints.
+        subscription_id: String,
+    },
+    /// Delete a subscription and cancel its waiting turn.
+    Delete {
+        /// The subscriptionId tumpel subscription list prints.
+        subscription_id: String,
+    },
+    /// End a subscription because its goal holds, and cancel its waiting turn.
+    Complete {
+        /// The subscriptionId tumpel subscription list prints.
+        subscription_id: String,
     },
 }
 
@@ -1648,6 +1716,7 @@ fn main() -> ExitCode {
             Command::Github { command } => github(command).await,
             Command::Config { command } => tenant_config(command).await,
             Command::Session { command } => sessions::session(command).await,
+            Command::Subscription { command } => subscriptions::subscription(command).await,
             Command::Turn { command } => sessions::turn(command).await,
             Command::Events { command } => events::events(command).await,
             Command::Transcript { command } => sessions::transcript(command).await,
