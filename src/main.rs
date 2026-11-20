@@ -845,22 +845,22 @@ enum TriggerCommand {
 #[derive(Args)]
 struct TriggerFields {
     /// The trigger name, unique in the tenant.
-    #[arg(long)]
+    #[arg(long, required = false, required_unless_present = "file")]
     name: String,
     /// Where the events come from: GitHub.
-    #[arg(long)]
+    #[arg(long, required = false, required_unless_present = "file")]
     source: String,
     /// The event type: `pull_request`, `push`, `status` or `issues`.
-    #[arg(long)]
+    #[arg(long, required = false, required_unless_present = "file")]
     event: String,
     /// A condition as `<field>=<value>`, such as `action=closed`, the field a dotted path into the payload. Repeat a field to match any of its values; conditions on different fields must all hold. Left out, every event of the type matches.
     #[arg(long = "where", value_name = "FIELD=VALUE")]
     condition: Vec<String>,
     /// The `personaId` of every session it starts; tumpel persona list prints it.
-    #[arg(long)]
+    #[arg(long, required = false, required_unless_present = "file")]
     persona_id: String,
     /// The model of every session it starts, one the persona's harness runs.
-    #[arg(long)]
+    #[arg(long, required = false, required_unless_present = "file")]
     model: String,
     /// The prompt, with `{{field}}` placeholders filled from the event, such as `Review {{pull_request.html_url}}`.
     #[arg(long, required_unless_present_any = ["prompt_file", "file"], conflicts_with = "prompt_file")]
@@ -1921,6 +1921,11 @@ mod tests {
     fn persona_create_takes_a_file_alone() {
         assert!(parses(&["persona", "create", "--file", "f.json"]));
         assert!(!parses(&["persona", "create", "--file", "f.json", "--connector", "a"]));
+    }
+
+    #[test]
+    fn trigger_create_takes_a_file_alone() {
+        assert!(parses(&["trigger", "create", "--file", "trigger.json"]));
     }
 
     #[test]
