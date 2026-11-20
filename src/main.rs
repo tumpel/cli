@@ -362,7 +362,7 @@ enum PersonaCommand {
         box_retention: Option<String>,
     },
     /// Change the persona fields its flags name; every other field and every file stays.
-    #[command(group(ArgGroup::new("change").required(true).multiple(true).args(["name", "secret_set_id", "connector", "box_memory_mib", "box_disk_mib", "box_retention"])))]
+    #[command(group(ArgGroup::new("change").required(true).multiple(true).args(["name", "secret_set_id", "connector", "box_memory_mib", "box_disk_mib", "box_retention", "tumpel_mcp"])))]
     Patch {
         /// The `personaId` that tumpel persona list prints.
         persona_id: String,
@@ -525,6 +525,9 @@ struct PersonaPatchFields {
     /// What happens to a session's box after each turn: Off, Warm or Auto.
     #[arg(long, value_name = "Off|Warm|Auto")]
     box_retention: Option<String>,
+    /// Whether every session of the persona reaches the Tumpel MCP server, to start sessions and send turns.
+    #[arg(long, value_name = "true|false")]
+    tumpel_mcp: Option<bool>,
 }
 
 #[derive(Args)]
@@ -579,6 +582,9 @@ struct PersonaFields {
     /// What happens to a session's box after each turn: Off tears it down, Warm keeps it until a stop, Auto keeps it until placement needs the room; left out, Auto.
     #[arg(long, value_name = "Off|Warm|Auto")]
     box_retention: Option<String>,
+    /// Let every session of the persona reach the Tumpel MCP server, to start sessions and send turns.
+    #[arg(long)]
+    tumpel_mcp: bool,
 }
 
 #[derive(Args)]
@@ -640,6 +646,9 @@ enum SessionCommand {
         /// What happens to the session's box after each turn: Off, Warm or Auto; left out, the persona's mode.
         #[arg(long, value_name = "Off|Warm|Auto")]
         box_retention: Option<String>,
+        /// A tag for the session, such as team:payments; repeat it for each tag, up to 16.
+        #[arg(long = "tag", value_name = "TAG")]
+        tag: Vec<String>,
     },
     /// Start a session from an open GitHub issue; the control plane writes the first prompt from it.
     StartFromIssue {
@@ -661,11 +670,33 @@ enum SessionCommand {
         /// What happens to the session's box after each turn: Off, Warm or Auto; left out, the persona's mode.
         #[arg(long, value_name = "Off|Warm|Auto")]
         box_retention: Option<String>,
+        /// A tag for the session, such as team:payments; repeat it for each tag, up to 16.
+        #[arg(long = "tag", value_name = "TAG")]
+        tag: Vec<String>,
     },
     /// Show one session with the stops of it that failed, the prebuild layer its files start from or why they start without one, and the image its latest turn boots.
     Get {
         /// The sessionId tumpel session list prints.
         session_id: String,
+    },
+    /// Replace every tag of a session; pass none to clear them.
+    SetTags {
+        /// The sessionId tumpel session list prints.
+        session_id: String,
+        /// The tags, such as team:payments, up to 16.
+        tags: Vec<String>,
+    },
+    /// Add and remove tags of a session; every other tag stays.
+    #[command(group(ArgGroup::new("change").required(true).multiple(true).args(["add", "remove"])))]
+    PatchTags {
+        /// The sessionId tumpel session list prints.
+        session_id: String,
+        /// A tag to add, such as team:payments; repeat it for each tag.
+        #[arg(long)]
+        add: Vec<String>,
+        /// A tag to remove; repeat it for each tag.
+        #[arg(long)]
+        remove: Vec<String>,
     },
     /// List the stops of a session that failed, oldest first.
     StopFailures {
@@ -720,6 +751,9 @@ enum SessionCommand {
         /// Only sessions whose latest turn last changed state at or before this time, such as 2026-11-17T12:00:00Z.
         #[arg(long)]
         last_turn_before: Option<String>,
+        /// Only sessions that carry this tag; repeat it to keep sessions that carry every tag named.
+        #[arg(long = "tag", value_name = "TAG")]
+        tag: Vec<String>,
     },
 }
 

@@ -8,8 +8,8 @@ use std::num::NonZeroU32;
 use std::str::FromStr;
 use std::time::Duration;
 use tumpel_api::types::{
-    BoxRetention, EntityId, SessionStart, SessionStartFromIssue, SessionState, SteerCreate, TranscriptPage, Turn,
-    TurnSend,
+    BoxRetention, EntityId, SessionStart, SessionStartFromIssue, SessionState, SessionTag, SessionTags,
+    SessionTagsPatch, SteerCreate, TranscriptPage, Turn, TurnSend,
 };
 use tumpel_api::{Client, Error};
 
@@ -35,6 +35,37 @@ pub(crate) fn id(flag: &str, value: &str) -> Result<EntityId> {
     parsed(flag, value)
 }
 
+fn tags(flag: &str, values: &[String]) -> Result<Vec<SessionTag>> {
+    values.iter().map(|value| parsed(flag, value)).collect()
+}
+
+async fn set_tags(client: &Client, endpoint: &str, session_id: &str, values: &[String]) -> Result<()> {
+    let session = id("sessionId", session_id)?;
+    let body = SessionTags {
+        tags: tags("tag", values)?,
+    };
+    print_json(&shown(client.sessions_set_tags(&session, &body).await, || {
+        format!("{endpoint}/v1/sessions/{session_id}/tags")
+    })?)
+}
+
+async fn patch_tags(
+    client: &Client,
+    endpoint: &str,
+    session_id: &str,
+    add: &[String],
+    remove: &[String],
+) -> Result<()> {
+    let session = id("sessionId", session_id)?;
+    let body = SessionTagsPatch {
+        add: tags("--add", add)?,
+        remove: tags("--remove", remove)?,
+    };
+    print_json(&shown(client.sessions_patch_tags(&session, &body).await, || {
+        format!("{endpoint}/v1/sessions/{session_id}/tags")
+    })?)
+}
+
 pub async fn session(command: SessionCommand) -> Result<()> {
     let (credentials, client) = signed_in()?;
     let endpoint = credentials.endpoint;
@@ -45,6 +76,7 @@ pub async fn session(command: SessionCommand) -> Result<()> {
             persona_id,
             prompt,
             box_retention,
+            tag,
         } => {
             let body = SessionStart {
                 box_retention: retention(box_retention.as_deref())?,
@@ -52,6 +84,7 @@ pub async fn session(command: SessionCommand) -> Result<()> {
                 persona_id: id("--persona-id", &persona_id)?,
                 prompt: parsed("--prompt", &prompt)?,
                 repository: parsed("--repository", &repository)?,
+                tags: tags("--tag", &tag)?,
             };
             print_json(&shown(client.sessions_start(&body).await, || {
                 format!("{endpoint}/v1/sessions")
@@ -64,6 +97,7 @@ pub async fn session(command: SessionCommand) -> Result<()> {
             model,
             persona_id,
             box_retention,
+            tag,
         } => {
             let body = SessionStartFromIssue {
                 box_retention: retention(box_retention.as_deref())?,
@@ -72,6 +106,7 @@ pub async fn session(command: SessionCommand) -> Result<()> {
                 persona_id: id("--persona-id", &persona_id)?,
                 owner: parsed("--owner", &owner)?,
                 name: parsed("--name", &name)?,
+                tags: tags("--tag", &tag)?,
             };
             print_json(&shown(client.sessions_start_from_issue(&body).await, || {
                 format!("{endpoint}/v1/sessions/from-issue")
@@ -83,6 +118,12 @@ pub async fn session(command: SessionCommand) -> Result<()> {
                 format!("{endpoint}/v1/sessions/{session_id}")
             })?)
         }
+        SessionCommand::SetTags { session_id, tags } => set_tags(&client, &endpoint, &session_id, &tags).await,
+        SessionCommand::PatchTags {
+            session_id,
+            add,
+            remove,
+        } => patch_tags(&client, &endpoint, &session_id, &add, &remove).await,
         SessionCommand::StopFailures { session_id } => {
             let session = id("sessionId", &session_id)?;
             print_json(&shown(client.sessions_list_stop_failures(&session).await, || {
@@ -120,20 +161,38 @@ pub async fn session(command: SessionCommand) -> Result<()> {
             state,
             host_id,
             last_turn_before,
-        } => {
-            let state = state
-                .map(|value| parsed::<SessionState>("--state", &value))
-                .transpose()?;
-            let host = host_id.map(|value| id("--host-id", &value)).transpose()?;
-            let before = last_turn_before
-                .map(|value| parsed::<DateTime<FixedOffset>>("--last-turn-before", &value))
-                .transpose()?;
-            print_json(&shown(
-                client.sessions_list(host.as_ref(), before.as_ref(), state).await,
-                || format!("{endpoint}/v1/sessions"),
-            )?)
-        }
+            tag,
+        } => list(&client, &endpoint, state, host_id, last_turn_before, &tag).await,
     }
+}
+
+async fn list(
+    client: &Client,
+    endpoint: &str,
+    state: Option<String>,
+    host_id: Option<String>,
+    last_turn_before: Option<String>,
+    tag: &[String],
+) -> Result<()> {
+    let state = state
+        .map(|value| parsed::<SessionState>("--state", &value))
+        .transpose()?;
+    let host = host_id.map(|value| id("--host-id", &value)).transpose()?;
+    let before = last_turn_before
+        .map(|value| parsed::<DateTime<FixedOffset>>("--last-turn-before", &value))
+        .transpose()?;
+    let tags = tags("--tag", tag)?;
+    print_json(&shown(
+        client
+            .sessions_list(
+                host.as_ref(),
+                before.as_ref(),
+                state,
+                (!tags.is_empty()).then_some(&tags),
+            )
+            .await,
+        || format!("{endpoint}/v1/sessions"),
+    )?)
 }
 
 pub async fn turn(command: TurnCommand) -> Result<()> {
@@ -256,7 +315,7 @@ async fn archive(
         let before = last_turn_before
             .map(|value| parsed::<DateTime<FixedOffset>>("--last-turn-before", &value))
             .transpose()?;
-        answered(client.sessions_list(None, before.as_ref(), state).await, || {
+        answered(client.sessions_list(None, before.as_ref(), state, None).await, || {
             format!("{endpoint}/v1/sessions")
         })?
         .into_iter()
