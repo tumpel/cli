@@ -51,7 +51,7 @@ async fn wait(
         let after = cursor.map(Sequence);
         let page = shown(
             client
-                .events_list(after.as_ref(), types.as_ref(), session.as_ref(), wait_seconds)
+                .events_list(after.as_ref(), types.as_ref(), session.as_ref(), None, wait_seconds)
                 .await,
             || format!("{endpoint}/v1/events"),
         )?;

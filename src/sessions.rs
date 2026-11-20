@@ -162,7 +162,8 @@ pub async fn session(command: SessionCommand) -> Result<()> {
             host_id,
             last_turn_before,
             tag,
-        } => list(&client, &endpoint, state, host_id, last_turn_before, &tag).await,
+            trigger,
+        } => list(&client, &endpoint, state, host_id, last_turn_before, &tag, trigger).await,
     }
 }
 
@@ -173,6 +174,7 @@ async fn list(
     host_id: Option<String>,
     last_turn_before: Option<String>,
     tag: &[String],
+    trigger: Option<String>,
 ) -> Result<()> {
     let state = state
         .map(|value| parsed::<SessionState>("--state", &value))
@@ -182,6 +184,7 @@ async fn list(
         .map(|value| parsed::<DateTime<FixedOffset>>("--last-turn-before", &value))
         .transpose()?;
     let tags = tags("--tag", tag)?;
+    let trigger = trigger.map(|value| id("--trigger", &value)).transpose()?;
     print_json(&shown(
         client
             .sessions_list(
@@ -189,6 +192,7 @@ async fn list(
                 before.as_ref(),
                 state,
                 (!tags.is_empty()).then_some(&tags),
+                trigger.as_ref(),
             )
             .await,
         || format!("{endpoint}/v1/sessions"),
@@ -315,9 +319,10 @@ async fn archive(
         let before = last_turn_before
             .map(|value| parsed::<DateTime<FixedOffset>>("--last-turn-before", &value))
             .transpose()?;
-        answered(client.sessions_list(None, before.as_ref(), state, None).await, || {
-            format!("{endpoint}/v1/sessions")
-        })?
+        answered(
+            client.sessions_list(None, before.as_ref(), state, None, None).await,
+            || format!("{endpoint}/v1/sessions"),
+        )?
         .into_iter()
         .map(|session| session.session_id)
         .collect()
