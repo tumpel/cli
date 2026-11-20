@@ -24,7 +24,7 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant};
 use tumpel_api::types::{
     CliCredentials, CliProofCredentials, DeviceApproval, DeviceCodeRequest, DeviceTokenRequest,
-    DeviceTokenRequestGrantType, EnrolmentTokenMint, OAuthErrorCode, Problem,
+    DeviceTokenRequestGrantType, EnrolmentTokenMint, EventProblem, OAuthErrorCode, Problem,
 };
 use tumpel_api::{Client, Error, ResponseValue};
 
@@ -1408,8 +1408,29 @@ fn host_name() -> String {
         .unwrap_or_else(|| "tumpel cli".to_string())
 }
 
+trait ProblemText: std::fmt::Debug {
+    fn text(&self) -> String;
+}
+
+impl ProblemText for Problem {
+    fn text(&self) -> String {
+        format!("{}: {}. {}", self.title, self.detail, self.fix)
+    }
+}
+
+impl ProblemText for EventProblem {
+    fn text(&self) -> String {
+        match self {
+            Self::EventCursorExpiredProblem(problem) => {
+                format!("{}: {}. {}", problem.title, problem.detail, problem.fix)
+            }
+            Self::Problem(problem) => problem.text(),
+        }
+    }
+}
+
 fn problem_text(problem: &Problem) -> String {
-    format!("{}: {}. {}", problem.title, problem.detail, problem.fix)
+    problem.text()
 }
 
 fn sensitive_header(value: &str, name: &str) -> Result<reqwest::header::HeaderValue> {
@@ -1585,10 +1606,13 @@ async fn explained(error: anyhow::Error) -> anyhow::Error {
     }
 }
 
-fn answered<T>(outcome: Result<ResponseValue<T>, Error<Problem>>, call: impl FnOnce() -> String) -> Result<T> {
+fn answered<T, P: ProblemText + Send + Sync + 'static>(
+    outcome: Result<ResponseValue<T>, Error<P>>,
+    call: impl FnOnce() -> String,
+) -> Result<T> {
     match outcome {
         Ok(answer) => Ok(answer.into_inner()),
-        Err(Error::ErrorResponse(problem)) => bail!("{}", problem_text(&problem)),
+        Err(Error::ErrorResponse(problem)) => bail!("{}", problem.text()),
         Err(Error::UnexpectedResponse(response)) => Err(UnexpectedAnswer(response).into()),
         Err(Error::InvalidResponsePayload(_, error)) => bail!(
             "calling {} returned an answer this tumpel cannot read ({error}). The control plane runs an older API than this CLI; install the CLI it serves with: curl -fsSL <endpoint>/v1/releases/install.sh | sh",
@@ -1598,8 +1622,8 @@ fn answered<T>(outcome: Result<ResponseValue<T>, Error<Problem>>, call: impl FnO
     }
 }
 
-fn shown<T: Serialize>(
-    outcome: Result<ResponseValue<T>, Error<Problem>>,
+fn shown<T: Serialize, P: ProblemText + Send + Sync + 'static>(
+    outcome: Result<ResponseValue<T>, Error<P>>,
     call: impl FnOnce() -> String,
 ) -> Result<serde_json::Value> {
     match outcome {

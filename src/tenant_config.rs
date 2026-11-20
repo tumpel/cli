@@ -8,7 +8,7 @@ use tumpel_api::types::{
     ApiKeyUpdate, ApiKeyUpdateKind, ApiKeyValue, ApiKeyValueKind, ConfigApiKey, ConfigApiKeyKind, ConfigExpiry,
     ConfigExpiryValue, ConfigHost, ConfigPersona, ConfigPersonaFile, ConfigPlan, ConfigSecret, ConfigSecretSet,
     ConfigSecretValue, ConfigSecretVariable, ConfigSecretVariableKind, ConfigSubscriptionToken,
-    ConfigSubscriptionTokenKind, ConfigTrigger, Connector, DisplayName, EffectiveHarnessVersion, EntityId,
+    ConfigSubscriptionTokenKind, ConfigTrigger, Connector, DisplayName, EffectiveHarnessVersion,
     EnvironmentVariableName, HarnessPinCreate, Host, HostState, Persona, PersonaFile, PersonaFilePath, Problem,
     SecretKey, SecretMemberUpdate, SecretName, SecretSet, SecretValue, SecretValueSource, SecretVariableUpdate,
     SecretVariableUpdateKind, SecretVariableValue, SecretVariableValueKind, Sha256Digest, SubscriptionTokenUpdate,
@@ -24,10 +24,10 @@ fn held_digest(file: &PersonaFile) -> &Sha256Digest {
     }
 }
 
-fn connector_identity(connector: &Connector) -> (&EntityId, &DisplayName) {
+fn connector_identity(connector: &Connector) -> (&str, &DisplayName) {
     match connector {
-        Connector::StaticConnector(connector) => (&connector.connector_id, &connector.name),
-        Connector::OAuthConnector(connector) => (&connector.connector_id, &connector.name),
+        Connector::StaticConnector(connector) => (connector.connector_id.as_str(), &connector.name),
+        Connector::OAuthConnector(connector) => (connector.connector_id.as_str(), &connector.name),
     }
 }
 
@@ -480,20 +480,15 @@ pub fn starter(live: &Live) -> Result<TenantConfig> {
             })
         })
         .collect::<Result<_>>()?;
-    let connector_names: HashMap<&str, &DisplayName> = live
-        .connectors
-        .iter()
-        .map(connector_identity)
-        .map(|(id, name)| (id.as_str(), name))
-        .collect();
+    let connector_names: HashMap<&str, &DisplayName> = live.connectors.iter().map(connector_identity).collect();
     let set_names: HashMap<&str, &SecretSet> = live
         .secret_sets
         .iter()
         .map(|set| (set.secret_set_id.as_str(), set))
         .collect();
     Ok(TenantConfig {
-        triggers: starter_triggers(&live.personas, &live.triggers)?,
         schema: None,
+        triggers: starter_triggers(&live.personas, &live.triggers)?,
         personas: live
             .personas
             .iter()
@@ -543,6 +538,7 @@ pub fn starter(live: &Live) -> Result<TenantConfig> {
                     harness: persona.harness,
                     name: persona.name.clone(),
                     secret_set_name: secret_set.name.clone(),
+                    tumpel_mcp: Some(persona.tumpel_mcp),
                 })
             })
             .collect::<Result<_>>()?,
