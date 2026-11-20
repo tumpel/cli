@@ -785,7 +785,7 @@ enum TriggerCommand {
     #[command(group(ArgGroup::new("input").required(true).args(["file", "name"])))]
     Create {
         /// The `TriggerCreate` JSON file.
-        #[arg(long, conflicts_with_all = ["name", "source", "event", "condition", "persona_id", "model", "prompt", "prompt_file"])]
+        #[arg(long, conflicts_with = "TriggerFields")]
         file: Option<PathBuf>,
         #[command(flatten)]
         fields: Option<TriggerFields>,
