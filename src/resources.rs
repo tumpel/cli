@@ -110,6 +110,7 @@ async fn persona_create(
         harness: harness(&fields.harness)?,
         name: parsed("--name", &fields.name)?,
         secret_set_id: entity_id(&fields.secret_set_id, "secret set")?,
+        tumpel_mcp: fields.tumpel_mcp.then_some(true),
     })
 }
 
@@ -174,6 +175,7 @@ async fn persona_update(client: &Client, url: &str, id: &EntityId, change: Perso
         files,
         name: name.map_or(Ok(current.name), |name| parsed("--name", &name))?,
         secret_set_id: secret_set_id.map_or(Ok(current.secret_set_id), |raw| entity_id(&raw, "secret set"))?,
+        tumpel_mcp: Some(current.tumpel_mcp),
     })
 }
 
@@ -188,6 +190,7 @@ fn persona_patch(fields: PersonaPatchFields) -> Result<PersonaPatch> {
             .secret_set_id
             .map(|raw| entity_id(&raw, "secret set"))
             .transpose()?,
+        tumpel_mcp: fields.tumpel_mcp,
     })
 }
 
