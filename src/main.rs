@@ -790,7 +790,7 @@ enum TriggerCommand {
         #[command(flatten)]
         fields: Option<TriggerFields>,
     },
-    /// Change the trigger fields a `TriggerPatch` JSON file or the flags name; every other field stays, and the trigger then runs as you.
+    /// Change the trigger fields a `TriggerPatch` JSON file or the flags name; every other field stays, and the trigger then runs as you. --source, --event and --where come together and replace what the trigger listens to.
     #[command(group(ArgGroup::new("change").required(true).multiple(true).args(["file", "name", "source", "event", "condition", "persona_id", "model", "prompt", "prompt_file"])))]
     Update {
         /// The `triggerId` that tumpel trigger list prints.
@@ -802,13 +802,13 @@ enum TriggerCommand {
         #[arg(long)]
         name: Option<String>,
         /// Where the events come from: GitHub.
-        #[arg(long)]
+        #[arg(long, requires = "event")]
         source: Option<String>,
         /// The event type: `pull_request`, `push`, `status` or `issues`.
-        #[arg(long)]
+        #[arg(long, requires = "source")]
         event: Option<String>,
-        /// A condition as `<field>=<value>`, repeated as for create; together they replace every condition.
-        #[arg(long = "where", value_name = "FIELD=VALUE")]
+        /// A condition as `<field>=<value>`, repeated as for create; together they replace every condition, and leaving them out with --event matches every event of the type.
+        #[arg(long = "where", value_name = "FIELD=VALUE", requires = "event")]
         condition: Vec<String>,
         /// The `personaId` of every session it starts.
         #[arg(long)]

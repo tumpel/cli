@@ -4,8 +4,8 @@ use crate::{answered, print_json, shown, signed_in, TriggerCommand, TriggerField
 use anyhow::{anyhow, Context, Result};
 use std::path::{Path, PathBuf};
 use tumpel_api::types::{
-    DraftTriggerTest, DraftTriggerTestKind, StoredTriggerTest, StoredTriggerTestKind, TriggerCondition, TriggerCreate,
-    TriggerPatch, TriggerPayload, TriggerPrompt, TriggerTest,
+    DraftTriggerTest, DraftTriggerTestKind, GitHubTriggerSource, Prompt, StoredTriggerTest, StoredTriggerTestKind,
+    TriggerCondition, TriggerCreate, TriggerPatch, TriggerPayload, TriggerSource, TriggerTest,
 };
 
 fn grouped(wheres: &[String]) -> Result<Vec<(String, Vec<String>)>> {
@@ -37,7 +37,16 @@ fn conditions(wheres: &[String]) -> Result<Vec<TriggerCondition>> {
         .collect()
 }
 
-fn prompt(text: Option<String>, file: Option<PathBuf>) -> Result<Option<TriggerPrompt>> {
+fn source(kind: &str, event: &str, wheres: &[String]) -> Result<TriggerSource> {
+    Ok(GitHubTriggerSource {
+        conditions: conditions(wheres)?,
+        event: parsed("--event", event)?,
+        kind: parsed("--source", kind)?,
+    }
+    .into())
+}
+
+fn prompt(text: Option<String>, file: Option<PathBuf>) -> Result<Option<Prompt>> {
     if let Some(file) = file {
         let text = std::fs::read_to_string(&file).with_context(|| format!("reading {}", file.display()))?;
         return Ok(Some(parsed("--prompt-file", &text)?));
@@ -50,13 +59,11 @@ fn trigger_create(file: Option<PathBuf>, fields: Option<TriggerFields>) -> Resul
         return read_json(&file.unwrap_or_default(), "TriggerCreate");
     };
     Ok(TriggerCreate {
-        conditions: conditions(&fields.condition)?,
-        event: parsed("--event", &fields.event)?,
         model: parsed("--model", &fields.model)?,
         name: parsed("--name", &fields.name)?,
         persona_id: id("--persona-id", &fields.persona_id)?,
         prompt: prompt(fields.prompt, fields.prompt_file)?.ok_or_else(|| anyhow!("pass --prompt or --prompt-file"))?,
-        source: parsed("--source", &fields.source)?,
+        source: source(&fields.source, &fields.event, &fields.condition)?,
     })
 }
 
@@ -83,7 +90,7 @@ pub async fn trigger(command: TriggerCommand) -> Result<()> {
             trigger_id,
             file,
             name,
-            source,
+            source: kind,
             event,
             condition,
             persona_id,
@@ -95,13 +102,14 @@ pub async fn trigger(command: TriggerCommand) -> Result<()> {
             let body = match file {
                 Some(file) => read_json(&file, "TriggerPatch")?,
                 None => TriggerPatch {
-                    conditions: conditions(&condition)?,
-                    event: event.map(|value| parsed("--event", &value)).transpose()?,
                     model: model.map(|value| parsed("--model", &value)).transpose()?,
                     name: name.map(|value| parsed("--name", &value)).transpose()?,
                     persona_id: persona_id.map(|value| id("--persona-id", &value)).transpose()?,
                     prompt: prompt(text, prompt_file)?,
-                    source: source.map(|value| parsed("--source", &value)).transpose()?,
+                    source: kind
+                        .zip(event)
+                        .map(|(kind, event)| source(&kind, &event, &condition))
+                        .transpose()?,
                 },
             };
             print_json(&shown(client.triggers_update(&trigger, &body).await, || {
