@@ -74,12 +74,24 @@ pub fn parse(file: &Path) -> Result<TenantConfig> {
             errors.join("\n  ")
         );
     }
-    serde_json::from_value(document).with_context(|| {
+    let config: TenantConfig = serde_json::from_value(document).with_context(|| {
         format!(
             "{} matches the schema but does not read as a TenantConfig",
             file.display()
         )
-    })
+    })?;
+    if let Some((index, _)) = config
+        .personas
+        .iter()
+        .enumerate()
+        .find(|(_, persona)| persona.tumpel_mcp.is_none())
+    {
+        bail!(
+            "{} leaves out /personas/{index}/tumpelMcp; set it to true or false before planning or applying the config",
+            file.display()
+        );
+    }
+    Ok(config)
 }
 
 fn refused(problem: &Problem) -> anyhow::Error {
@@ -670,6 +682,24 @@ mod tests {
         assert!(
             matches!(expiry(&config), ConfigExpiry::SecretValueSource(from) if from.env.as_str() == EXPIRY_VARIABLE)
         );
+    }
+
+    #[test]
+    fn validate_refuses_a_persona_without_a_tumpel_mcp_choice() {
+        let file = std::env::temp_dir().join(format!("tumpel-{}-missing-tumpel-mcp.json", std::process::id()));
+        let document = json!({
+            "$schema": "https://example.test/TenantConfig.json",
+            "personas": [{
+                "name": "reviewer", "harness": "ClaudeCode", "secretSetName": "prod",
+                "connectorNames": [], "files": [],
+            }],
+            "secretSets": [{ "name": "prod", "secrets": [] }],
+            "harnessPins": [],
+            "hosts": [],
+        });
+        std::fs::write(&file, document.to_string()).expect("the test config is written");
+        let error = parse(&file).expect_err("tumpelMcp is absent");
+        assert!(error.to_string().contains("/personas/0/tumpelMcp"), "{error}");
     }
 
     #[test]
