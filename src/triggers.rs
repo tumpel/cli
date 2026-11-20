@@ -2,10 +2,10 @@ use crate::resources::read_json;
 use crate::sessions::{id, parsed};
 use crate::{answered, print_json, shown, signed_in, TriggerCommand, TriggerFields};
 use anyhow::{anyhow, Context, Result};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use tumpel_api::types::{
     DraftTriggerTest, DraftTriggerTestKind, GitHubTriggerSource, Prompt, StoredTriggerTest, StoredTriggerTestKind,
-    TriggerCondition, TriggerCreate, TriggerPatch, TriggerPayload, TriggerSource, TriggerTest,
+    TriggerCondition, TriggerCreate, TriggerPatch, TriggerSource, TriggerTest,
 };
 
 fn grouped(wheres: &[String]) -> Result<Vec<(String, Vec<String>)>> {
@@ -67,10 +67,6 @@ fn trigger_create(file: Option<PathBuf>, fields: Option<TriggerFields>) -> Resul
     })
 }
 
-fn payload(file: &Path) -> Result<TriggerPayload> {
-    read_json(file, "TriggerPayload")
-}
-
 pub async fn trigger(command: TriggerCommand) -> Result<()> {
     let (credentials, client) = signed_in()?;
     let url = format!("{}/v1/triggers", credentials.endpoint);
@@ -127,7 +123,7 @@ pub async fn trigger(command: TriggerCommand) -> Result<()> {
             file,
             payload_file,
         } => {
-            let payload = payload(&payload_file)?;
+            let payload = read_json(&payload_file, "TriggerPayload")?;
             let body: TriggerTest = match trigger_id {
                 Some(trigger_id) => StoredTriggerTest {
                     kind: StoredTriggerTestKind::Stored,

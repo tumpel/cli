@@ -8,11 +8,12 @@ use tumpel_api::types::{
     ApiKeyUpdate, ApiKeyUpdateKind, ApiKeyValue, ApiKeyValueKind, ConfigApiKey, ConfigApiKeyKind, ConfigExpiry,
     ConfigExpiryValue, ConfigHost, ConfigPersona, ConfigPersonaFile, ConfigPlan, ConfigSecret, ConfigSecretSet,
     ConfigSecretValue, ConfigSecretVariable, ConfigSecretVariableKind, ConfigSubscriptionToken,
-    ConfigSubscriptionTokenKind, Connector, DisplayName, EffectiveHarnessVersion, EntityId, EnvironmentVariableName,
-    HarnessPinCreate, Host, HostState, Persona, PersonaFile, PersonaFilePath, Problem, SecretKey, SecretMemberUpdate,
-    SecretName, SecretSet, SecretValue, SecretValueSource, SecretVariableUpdate, SecretVariableUpdateKind,
-    SecretVariableValue, SecretVariableValueKind, Sha256Digest, SubscriptionTokenUpdate, SubscriptionTokenUpdateKind,
-    SubscriptionTokenValue, SubscriptionTokenValueKind, TenantConfig, TenantConfigApply, TenantConfigPlanRequest,
+    ConfigSubscriptionTokenKind, ConfigTrigger, Connector, DisplayName, EffectiveHarnessVersion, EntityId,
+    EnvironmentVariableName, HarnessPinCreate, Host, HostState, Persona, PersonaFile, PersonaFilePath, Problem,
+    SecretKey, SecretMemberUpdate, SecretName, SecretSet, SecretValue, SecretValueSource, SecretVariableUpdate,
+    SecretVariableUpdateKind, SecretVariableValue, SecretVariableValueKind, Sha256Digest, SubscriptionTokenUpdate,
+    SubscriptionTokenUpdateKind, SubscriptionTokenValue, SubscriptionTokenValueKind, TenantConfig, TenantConfigApply,
+    TenantConfigPlanRequest, Trigger,
 };
 use tumpel_api::{Client, Error, TENANT_CONFIG_SCHEMA};
 
@@ -102,6 +103,7 @@ pub struct Live {
     pub pins: Vec<EffectiveHarnessVersion>,
     pub hosts: Vec<Host>,
     pub connectors: Vec<Connector>,
+    pub triggers: Vec<Trigger>,
 }
 
 pub async fn live(client: &Client) -> Result<Live> {
@@ -111,6 +113,7 @@ pub async fn live(client: &Client) -> Result<Live> {
         pins: answer(client.harness_catalog_list_pins(), "listing harness pins").await?,
         hosts: answer(client.hosts_list(), "listing hosts").await?,
         connectors: answer(client.connectors_list(), "listing connectors").await?,
+        triggers: answer(client.triggers_list(), "listing triggers").await?,
     })
 }
 
@@ -436,6 +439,32 @@ pub fn starter_path(persona: &str, path: &str) -> String {
     format!("persona-files/{folder}/{path}")
 }
 
+fn starter_triggers(personas: &[Persona], triggers: &[Trigger]) -> Result<Vec<ConfigTrigger>> {
+    let persona_names: HashMap<&str, &DisplayName> = personas
+        .iter()
+        .map(|persona| (persona.persona_id.as_str(), &persona.name))
+        .collect();
+    triggers
+        .iter()
+        .map(|trigger| {
+            let persona_name = persona_names.get(trigger.persona_id.as_str()).ok_or_else(|| {
+                anyhow!(
+                    "trigger {} names persona {}, which tumpel persona list does not show; point it at a persona with tumpel trigger update",
+                    *trigger.name,
+                    *trigger.persona_id
+                )
+            })?;
+            Ok(ConfigTrigger {
+                model: trigger.model.clone(),
+                name: trigger.name.clone(),
+                persona_name: (*persona_name).clone(),
+                prompt: trigger.prompt.clone(),
+                source: trigger.source.clone(),
+            })
+        })
+        .collect()
+}
+
 pub fn starter(live: &Live) -> Result<TenantConfig> {
     let secret_sets = live
         .secret_sets
@@ -463,7 +492,7 @@ pub fn starter(live: &Live) -> Result<TenantConfig> {
         .map(|set| (set.secret_set_id.as_str(), set))
         .collect();
     Ok(TenantConfig {
-        triggers: Vec::new(),
+        triggers: starter_triggers(&live.personas, &live.triggers)?,
         schema: None,
         personas: live
             .personas
@@ -553,12 +582,64 @@ pub fn write_new(file: &Path, config: &TenantConfig) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{expiry_values, parse, schema_errors};
+    use super::{expiry_values, parse, schema_errors, starter_triggers};
     use serde_json::json;
     use std::path::PathBuf;
     use tumpel_api::types::{ConfigExpiry, ConfigSecret};
 
     const EXPIRY_VARIABLE: &str = "TUMPEL_TEST_TOKEN_EXPIRES_AT";
+
+    #[test]
+    fn init_writes_each_live_trigger_naming_its_persona_by_name() {
+        let personas = [serde_json::from_value(json!({
+            "personaId": "7d0f0b8e-0000-4000-8000-000000000001",
+            "tenantId": "7d0f0b8e-0000-4000-8000-000000000009",
+            "name": "reviewer",
+            "harness": "ClaudeCode",
+            "secretSetId": "7d0f0b8e-0000-4000-8000-000000000002",
+            "boxRetention": "Auto",
+            "connectorIds": [],
+            "files": [],
+            "tumpelMcp": false,
+            "createdAt": 1,
+            "updatedAt": 1
+        }))
+        .expect("a persona")];
+        let source = json!({
+            "kind": "GitHub",
+            "event": "status",
+            "conditions": [{ "field": "state", "values": ["pending"] }]
+        });
+        let trigger = |persona_id: &str| {
+            serde_json::from_value(json!({
+                "triggerId": "7d0f0b8e-0000-4000-8000-000000000003",
+                "tenantId": "7d0f0b8e-0000-4000-8000-000000000009",
+                "name": "agent-review",
+                "source": source,
+                "personaId": persona_id,
+                "model": "claude-opus-5-5",
+                "prompt": "Review {{target_url}}.",
+                "principalId": "7d0f0b8e-0000-4000-8000-000000000004",
+                "createdAt": 1,
+                "updatedAt": 1
+            }))
+            .expect("a trigger")
+        };
+
+        let written = starter_triggers(&personas, &[trigger("7d0f0b8e-0000-4000-8000-000000000001")])
+            .expect("the trigger's persona is live");
+        assert_eq!(
+            serde_json::to_value(written).expect("config triggers serialize"),
+            json!([{
+                "name": "agent-review",
+                "source": source,
+                "personaName": "reviewer",
+                "model": "claude-opus-5-5",
+                "prompt": "Review {{target_url}}."
+            }])
+        );
+        assert!(starter_triggers(&personas, &[trigger("7d0f0b8e-0000-4000-8000-000000000005")]).is_err());
+    }
 
     fn config_with_expiry_from_env(name: &str) -> PathBuf {
         let file = std::env::temp_dir().join(format!("tumpel-{}-{name}.json", std::process::id()));
