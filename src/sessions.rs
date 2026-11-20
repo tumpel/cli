@@ -35,7 +35,7 @@ pub(crate) fn id(flag: &str, value: &str) -> Result<EntityId> {
     parsed(flag, value)
 }
 
-fn tags(flag: &str, values: &[String]) -> Result<Vec<SessionTag>> {
+pub(crate) fn tags(flag: &str, values: &[String]) -> Result<Vec<SessionTag>> {
     values.iter().map(|value| parsed(flag, value)).collect()
 }
 
