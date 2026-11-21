@@ -294,6 +294,11 @@ enum HostCommand {
         /// The `hostId` that tumpel host list prints.
         host_id: String,
     },
+    /// Restore an Unhealthy or RateLimited host to Healthy, so it gets turn offers again.
+    RestoreHealth {
+        /// The `hostId` that tumpel host list prints.
+        host_id: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1723,6 +1728,15 @@ async fn host(command: HostCommand) -> Result<()> {
                 .map_err(|error| anyhow::anyhow!("{host_id:?} is not a host id: {error}"))?;
             print_json(&shown(client.hosts_revoke(&id).await, || {
                 format!("{endpoint}/v1/hosts/{host_id}/revoke")
+            })?)
+        }
+        HostCommand::RestoreHealth { host_id } => {
+            let id = host_id
+                .clone()
+                .try_into()
+                .map_err(|error| anyhow::anyhow!("{host_id:?} is not a host id: {error}"))?;
+            print_json(&shown(client.hosts_restore_health(&id).await, || {
+                format!("{endpoint}/v1/hosts/{host_id}/restore-health")
             })?)
         }
     }
