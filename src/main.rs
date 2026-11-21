@@ -5,6 +5,7 @@ mod config;
 mod connections;
 mod connectors;
 mod events;
+mod limits;
 mod members;
 mod metrics;
 mod openrouter;
@@ -69,6 +70,11 @@ enum Command {
     Host {
         #[command(subcommand)]
         command: HostCommand,
+    },
+    /// Read the limits the tenant runs under, or set them (Owner only).
+    Limits {
+        #[command(subcommand)]
+        command: LimitsCommand,
     },
     /// List the harness catalog and pin a harness to one of its versions.
     Harness {
@@ -305,6 +311,22 @@ enum HostCommand {
 enum ReleaseCommand {
     /// Show the current release: its version, commit, channel protocol version, supervisors, CLIs and guest images.
     Current,
+}
+
+#[derive(Subcommand)]
+enum LimitsCommand {
+    /// Print the limits profile the tenant runs under and its source: Free, Configured or Custom.
+    Get,
+    /// Run the tenant under a profile of its own, or under the preset of a tier, which drops its own profile. A Free tenant may set values at or below the Free preset only.
+    #[command(group(ArgGroup::new("limits").required(true).args(["file", "tier"])))]
+    Set {
+        /// The `TenantLimitsProfile` JSON file.
+        #[arg(long)]
+        file: Option<PathBuf>,
+        /// The tier whose preset to run under: `Free` or `Configured`.
+        #[arg(long)]
+        tier: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1854,6 +1876,7 @@ fn main() -> ExitCode {
             Command::Invitation { command } => members::invitation(command).await,
             Command::Devices { command } => devices(command).await,
             Command::Host { command } => host(command).await,
+            Command::Limits { command } => limits::limits(command).await,
             Command::Harness { command } => resources::harnesses(command).await,
             Command::Release { command } => release(command).await,
             Command::Persona { command } => resources::personas(command).await,
@@ -1960,6 +1983,14 @@ mod tests {
     fn persona_create_takes_a_file_alone() {
         assert!(parses(&["persona", "create", "--file", "f.json"]));
         assert!(!parses(&["persona", "create", "--file", "f.json", "--connector", "a"]));
+    }
+
+    #[test]
+    fn limits_set_takes_a_profile_file_or_a_tier() {
+        assert!(parses(&["limits", "set", "--file", "limits.json"]));
+        assert!(parses(&["limits", "set", "--tier", "Free"]));
+        assert!(!parses(&["limits", "set"]));
+        assert!(!parses(&["limits", "set", "--file", "limits.json", "--tier", "Free"]));
     }
 
     #[test]
