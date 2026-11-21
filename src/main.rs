@@ -880,9 +880,9 @@ enum EventsCommand {
         /// Keep events of this type, such as `TurnCompleted`; repeat it for several types.
         #[arg(long)]
         event: Vec<tumpel_api::types::TenantEventType>,
-        /// Keep events of this session, by the sessionId tumpel session list prints.
+        /// Keep events of this session, by the sessionId tumpel session list prints; repeat it for several sessions.
         #[arg(long)]
-        session_id: Option<String>,
+        session_id: Vec<String>,
         /// Keep events of this turn, by the turnId tumpel turn send prints.
         #[arg(long)]
         turn_id: Option<String>,
@@ -898,9 +898,9 @@ enum EventsCommand {
         /// Keep events of this type, such as `SessionIdle`; repeat it for several types.
         #[arg(long)]
         event: Vec<tumpel_api::types::TenantEventType>,
-        /// Keep events of this session, by the sessionId tumpel session list prints.
+        /// Keep events of this session, by the sessionId tumpel session list prints; repeat it for several sessions.
         #[arg(long)]
-        session_id: Option<String>,
+        session_id: Vec<String>,
     },
 }
 
@@ -1945,6 +1945,28 @@ mod tests {
     fn persona_create_takes_a_file_alone() {
         assert!(parses(&["persona", "create", "--file", "f.json"]));
         assert!(!parses(&["persona", "create", "--file", "f.json", "--connector", "a"]));
+    }
+
+    #[test]
+    fn events_wait_and_follow_take_several_sessions() {
+        assert!(parses(&[
+            "events",
+            "wait",
+            "--timeout-seconds",
+            "5",
+            "--session-id",
+            "s1",
+            "--session-id",
+            "s2"
+        ]));
+        assert!(parses(&[
+            "events",
+            "follow",
+            "--session-id",
+            "s1",
+            "--session-id",
+            "s2"
+        ]));
     }
 
     #[test]

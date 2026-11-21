@@ -24,8 +24,24 @@ pub async fn events(command: EventsCommand) -> Result<()> {
             after_event_id,
             event,
             session_id,
-        } => follow(after_event_id, &event, session_id.as_deref()).await,
+        } => follow(after_event_id, &event, &session_id).await,
     }
+}
+
+fn server_session(session_ids: &[String]) -> Result<Option<EntityId>> {
+    let mut sessions = session_ids
+        .iter()
+        .map(|session| id("sessionId", session))
+        .collect::<Result<Vec<_>>>()?;
+    Ok(if sessions.len() == 1 { sessions.pop() } else { None })
+}
+
+fn names_session(event: &serde_json::Value, session_ids: &[String]) -> bool {
+    session_ids.is_empty()
+        || event
+            .get("sessionId")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|session| session_ids.iter().any(|wanted| wanted == session))
 }
 
 fn names_turn(event: &serde_json::Value, turn_id: Option<&str>) -> bool {
@@ -35,13 +51,13 @@ fn names_turn(event: &serde_json::Value, turn_id: Option<&str>) -> bool {
 async fn wait(
     after_event_id: Option<i64>,
     event: Vec<TenantEventType>,
-    session_id: Option<String>,
+    session_id: Vec<String>,
     turn_id: Option<String>,
     timeout_seconds: u64,
 ) -> Result<()> {
     let (credentials, client) = signed_in()?;
     let endpoint = credentials.endpoint;
-    let session = session_id.as_deref().map(|value| id("sessionId", value)).transpose()?;
+    let session = server_session(&session_id)?;
     let types = (!event.is_empty()).then_some(event);
     let deadline = Instant::now() + Duration::from_secs(timeout_seconds);
     let mut cursor = after_event_id;
@@ -60,7 +76,10 @@ async fn wait(
             .and_then(serde_json::Value::as_array)
             .cloned()
             .unwrap_or_default();
-        if let Some(found) = events.iter().find(|event| names_turn(event, turn_id.as_deref())) {
+        if let Some(found) = events
+            .iter()
+            .find(|event| names_session(event, &session_id) && names_turn(event, turn_id.as_deref()))
+        {
             return print_json(found);
         }
         cursor = page.get("lastEventId").and_then(serde_json::Value::as_i64);
@@ -99,14 +118,18 @@ fn follow_url(
     Ok(url.into())
 }
 
-async fn follow(after_event_id: Option<i64>, event: &[TenantEventType], session_id: Option<&str>) -> Result<()> {
+async fn follow(after_event_id: Option<i64>, event: &[TenantEventType], session_id: &[String]) -> Result<()> {
     let (credentials, _) = signed_in()?;
-    if let Some(session) = session_id {
-        let _: EntityId = id("sessionId", session)?;
-    }
+    let session = server_session(session_id)?;
     let mut cursor = after_event_id;
     loop {
-        let mut request = follow_url(&credentials.endpoint, cursor, event, session_id)?.into_client_request()?;
+        let mut request = follow_url(
+            &credentials.endpoint,
+            cursor,
+            event,
+            session.as_deref().map(String::as_str),
+        )?
+        .into_client_request()?;
         let mut authorization = HeaderValue::from_str(&format!("Bearer {}", *credentials.token))
             .context("the stored token is not a valid header value; run tumpel login")?;
         authorization.set_sensitive(true);
@@ -126,10 +149,12 @@ async fn follow(after_event_id: Option<i64>, event: &[TenantEventType], session_
                 Ok(Message::Close(_)) | Err(_) => break,
                 Ok(_) => continue,
             };
-            println!("{text}");
             let event: serde_json::Value =
                 serde_json::from_str(&text).context("the event stream sent a line that is not JSON")?;
             cursor = event.get("eventId").and_then(serde_json::Value::as_i64).or(cursor);
+            if names_session(&event, session_id) {
+                println!("{text}");
+            }
         }
         tokio::time::sleep(RECONNECT_AFTER).await;
     }
@@ -152,6 +177,18 @@ mod tests {
             "wss://tumpel.example/v1/events?waitSeconds=0&afterEventId=7&event=TurnCompleted&event=TurnFailed&sessionId=s1"
         );
         Ok(())
+    }
+
+    #[test]
+    fn a_session_filter_keeps_only_events_of_those_sessions() {
+        let sessions = ["s1".to_string(), "s2".to_string()];
+        assert!(names_session(&serde_json::json!({ "sessionId": "s2" }), &sessions));
+        assert!(!names_session(&serde_json::json!({ "sessionId": "s3" }), &sessions));
+        assert!(!names_session(
+            &serde_json::json!({ "event": "HostOffline" }),
+            &sessions
+        ));
+        assert!(names_session(&serde_json::json!({ "event": "HostOffline" }), &[]));
     }
 
     #[test]
