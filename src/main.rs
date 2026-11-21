@@ -21,6 +21,7 @@ use serde::Serialize;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tumpel_api::types::{
     CliCredentials, CliProofCredentials, DeviceApproval, DeviceCodeRequest, DeviceTokenRequest,
@@ -1415,15 +1416,27 @@ fn host_name() -> String {
 
 trait ProblemText: std::fmt::Debug {
     fn text(&self) -> String;
+    fn is_unrecognised(&self) -> bool;
 }
 
 impl ProblemText for Problem {
+    fn is_unrecognised(&self) -> bool {
+        matches!(self.code, tumpel_api::types::ProblemCode::Unrecognised(_))
+    }
+
     fn text(&self) -> String {
         format!("{}: {}. {}", self.title, self.detail, self.fix)
     }
 }
 
 impl ProblemText for EventProblem {
+    fn is_unrecognised(&self) -> bool {
+        match self {
+            Self::EventCursorExpiredProblem(_) => false,
+            Self::Problem(problem) => problem.is_unrecognised(),
+        }
+    }
+
     fn text(&self) -> String {
         match self {
             Self::EventCursorExpiredProblem(problem) => {
@@ -1575,40 +1588,32 @@ fn signed_in() -> Result<(CliCredentials, Client)> {
     Ok((credentials, client))
 }
 
-#[derive(Debug)]
-struct UnexpectedAnswer(reqwest::Response);
+const UNRECOGNISED_RESPONSE_EXIT: u8 = 3;
+static UPDATE_MESSAGE_PRINTED: AtomicBool = AtomicBool::new(false);
 
-impl std::fmt::Display for UnexpectedAnswer {
+#[derive(Debug)]
+struct UnrecognisedResponse(String);
+
+impl std::fmt::Display for UnrecognisedResponse {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            formatter,
-            "The Tumpel service at {} answered status {}",
-            self.0.url().host_str().unwrap_or("your endpoint"),
-            self.0.status().as_u16()
-        )
+        write!(formatter, "the server sent a response this CLI doesn't recognise, please update the CLI: curl -fsSL {}/v1/releases/install.sh | sh", self.0)
     }
 }
 
-impl std::error::Error for UnexpectedAnswer {}
+impl std::error::Error for UnrecognisedResponse {}
 
-async fn explained(error: anyhow::Error) -> anyhow::Error {
-    let UnexpectedAnswer(response) = match error.downcast::<UnexpectedAnswer>() {
-        Ok(answer) => answer,
-        Err(error) => return error,
-    };
-    let host = response.url().host_str().unwrap_or("your endpoint").to_string();
-    let status = response.status().as_u16();
-    if !response.status().is_client_error() {
-        return anyhow::anyhow!(
-            "The Tumpel service at {host} failed with status {status}; try again in a few minutes."
-        );
-    }
-    let body = response.text().await.unwrap_or_default();
-    match serde_json::from_str::<Problem>(&body) {
-        Ok(problem) => anyhow::anyhow!("{}. {}", problem.title, problem.fix),
-        Err(_) => anyhow::anyhow!(
-            "The Tumpel service at {host} refused the request with status {status} and no problem document. Check the command's arguments; if they are right, report it at https://github.com/tumpel/cli/issues/new."
-        ),
+fn unrecognised_response(call: &str) -> UnrecognisedResponse {
+    UnrecognisedResponse(
+        call.split_once("/v1/")
+            .map_or(call, |(endpoint, _)| endpoint)
+            .trim_end_matches('/')
+            .to_string(),
+    )
+}
+
+fn update_message(response: &UnrecognisedResponse) {
+    if !UPDATE_MESSAGE_PRINTED.swap(true, Ordering::Relaxed) {
+        eprintln!("{response}");
     }
 }
 
@@ -1618,12 +1623,10 @@ fn answered<T, P: ProblemText + Send + Sync + 'static>(
 ) -> Result<T> {
     match outcome {
         Ok(answer) => Ok(answer.into_inner()),
+        Err(Error::ErrorResponse(problem)) if problem.is_unrecognised() => Err(unrecognised_response(&call()).into()),
         Err(Error::ErrorResponse(problem)) => bail!("{}", problem.text()),
-        Err(Error::UnexpectedResponse(response)) => Err(UnexpectedAnswer(response).into()),
-        Err(Error::InvalidResponsePayload(_, error)) => bail!(
-            "calling {} returned an answer this tumpel cannot read ({error}). The control plane runs an older API than this CLI; install the CLI it serves with: curl -fsSL <endpoint>/v1/releases/install.sh | sh",
-            call()
-        ),
+        Err(Error::UnexpectedResponse(_)) => Err(unrecognised_response(&call()).into()),
+        Err(Error::InvalidResponsePayload(_, _)) => Err(unrecognised_response(&call()).into()),
         Err(error) => Err(error).with_context(|| format!("calling {}", call())),
     }
 }
@@ -1634,11 +1637,15 @@ fn shown<T: Serialize, P: ProblemText + Send + Sync + 'static>(
 ) -> Result<serde_json::Value> {
     match outcome {
         Err(Error::InvalidResponsePayload(body, _)) => {
-            let value: serde_json::Value = serde_json::from_slice(&body)
-                .with_context(|| format!("calling {} returned a body that is not JSON", call()))?;
-            if let Some(problem) = problem_fields(&value) {
-                bail!("{problem}");
+            let response = unrecognised_response(&call());
+            let value: serde_json::Value = match serde_json::from_slice(&body) {
+                Ok(value) => value,
+                Err(_) => return Err(response.into()),
+            };
+            if !(value.is_object() || value.is_array()) || problem_fields(&value).is_some() {
+                return Err(response.into());
             }
+            update_message(&response);
             Ok(value)
         }
         outcome => Ok(serde_json::to_value(answered(outcome, call)?)?),
@@ -1846,7 +1853,7 @@ fn main() -> ExitCode {
         }
     };
     let outcome = runtime.block_on(async {
-        let outcome = match cli.command {
+        match cli.command {
             Command::Login { endpoint, name } => login(endpoint, name).await,
             Command::Whoami => whoami().await,
             Command::Tenants => members::tenants().await,
@@ -1878,15 +1885,15 @@ fn main() -> ExitCode {
             Command::GithubActions { command } => connections::github_actions(command).await,
             Command::Circleci { command } => connections::circleci(command).await,
             Command::Namespace { command } => connections::namespace(command).await,
-        };
-        match outcome {
-            Err(error) => Err(explained(error).await),
-            done => done,
         }
     });
     match outcome {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
+            if let Some(response) = error.downcast_ref::<UnrecognisedResponse>() {
+                update_message(response);
+                return ExitCode::from(UNRECOGNISED_RESPONSE_EXIT);
+            }
             eprintln!("tumpel: {error:#}");
             ExitCode::FAILURE
         }
@@ -1923,8 +1930,8 @@ mod tests {
         let outcome: Result<ResponseValue<Whoami>, Error<Problem>> =
             Err(Error::InvalidResponsePayload(body.as_bytes().to_vec().into(), error));
         assert_eq!(
-            shown(outcome, String::new).unwrap_err().to_string(),
-            "Host retired: The host left the pool. Enrol it again"
+            shown(outcome, || "https://example.test/v1/whoami".to_string()).unwrap_err().to_string(),
+            "the server sent a response this CLI doesn't recognise, please update the CLI: curl -fsSL https://example.test/v1/releases/install.sh | sh"
         );
     }
 

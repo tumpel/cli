@@ -14,3 +14,7 @@ Always follow `rules/errors.md` and `rules/coding-standards.md`.
 - `npm run check` runs every check. `npm run fix` formats.
 - `npm test` runs the Rust tests.
 - Releases are mechanical; never bump the version in `Cargo.toml`, tag or publish by hand. A merge to `main` that changes a shipped file publishes a GitHub pre-release `vX.Y.Z-rc.N`, versioned from the conventional commit types (breaking major, `feat` minor, `fix` and `perf` patch). Only the manual `promote` workflow ships a release candidate as the stable GitHub release `vX.Y.Z`. A rerun releases the same version.
+
+## Server compatibility
+
+Clients ship before the back end. The server can return values this CLI does not know. Never panic or show a raw decode error for an unknown enum, field shape, status or body. Print the update message and the endpoint's install command once per invocation. Keep working when the response can still be displayed; otherwise exit with code 3.
