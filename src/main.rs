@@ -317,16 +317,14 @@ enum ReleaseCommand {
 enum LimitsCommand {
     /// Print the limits profile the tenant runs under and its source: Free, Configured or Custom.
     Get,
-    /// Run the tenant under a profile of its own, or under the preset of a tier, which drops its own profile. A Free tenant may set values at or below the Free preset only.
-    #[command(group(ArgGroup::new("limits").required(true).args(["file", "tier"])))]
+    /// Run the tenant under a profile of its own. A Free tenant may set values at or below the Free preset only.
     Set {
         /// The `TenantLimitsProfile` JSON file.
         #[arg(long)]
-        file: Option<PathBuf>,
-        /// The tier whose preset to run under: `Free` or `Configured`.
-        #[arg(long)]
-        tier: Option<String>,
+        file: PathBuf,
     },
+    /// Drop the tenant's own profile, so it runs under the preset of its tier. The tier never changes.
+    Reset,
 }
 
 #[derive(Subcommand)]
@@ -1983,14 +1981,6 @@ mod tests {
     fn persona_create_takes_a_file_alone() {
         assert!(parses(&["persona", "create", "--file", "f.json"]));
         assert!(!parses(&["persona", "create", "--file", "f.json", "--connector", "a"]));
-    }
-
-    #[test]
-    fn limits_set_takes_a_profile_file_or_a_tier() {
-        assert!(parses(&["limits", "set", "--file", "limits.json"]));
-        assert!(parses(&["limits", "set", "--tier", "Free"]));
-        assert!(!parses(&["limits", "set"]));
-        assert!(!parses(&["limits", "set", "--file", "limits.json", "--tier", "Free"]));
     }
 
     #[test]
