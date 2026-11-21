@@ -54,7 +54,7 @@ jobs:
           sha256sum tumpel-x86_64-linux > tumpel-x86_64-linux.sha256
           ./tumpel-x86_64-linux --version
 
-      - name: Tag the release candidate's commit with the stable version before anything is published
+      - name: Tag the release candidate's commit with the stable version
         run: |
           tagged=$(git ls-remote --tags origin "refs/tags/$TAG" | cut -f1)
           if [ -z "$tagged" ]; then
@@ -64,13 +64,6 @@ jobs:
             echo "promote: $TAG already tags $tagged, not the commit of $CANDIDATE; promote a release candidate of that commit" >&2
             exit 1
           fi
-
-      - name: Publish tumpel to crates.io unless it already has this version
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: |
-          published=$(curl -fsS https://index.crates.io/tu/mp/tumpel | jq -r --arg v "$TUMPEL_RELEASE_VERSION" 'select(.vers == $v) | .vers')
-          [ -n "$published" ] || cargo publish --allow-dirty
 
       - name: Publish the stable GitHub release with the binary and its sha256
         env:
