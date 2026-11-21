@@ -24,7 +24,7 @@ fn held_digest(file: &PersonaFile) -> &Sha256Digest {
     }
 }
 
-fn connector_identity(connector: &Connector) -> (&str, &DisplayName) {
+pub(crate) fn connector_identity(connector: &Connector) -> (&str, &DisplayName) {
     match connector {
         Connector::StaticConnector(connector) => (connector.connector_id.as_str(), &connector.name),
         Connector::OAuthConnector(connector) => (connector.connector_id.as_str(), &connector.name),
