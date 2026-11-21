@@ -5,6 +5,7 @@ mod config;
 mod connections;
 mod connectors;
 mod events;
+mod limits;
 mod members;
 mod metrics;
 mod openrouter;
@@ -69,6 +70,11 @@ enum Command {
     Host {
         #[command(subcommand)]
         command: HostCommand,
+    },
+    /// Read the limits the tenant runs under, or set them (Owner only).
+    Limits {
+        #[command(subcommand)]
+        command: LimitsCommand,
     },
     /// List the harness catalog and pin a harness to one of its versions.
     Harness {
@@ -305,6 +311,20 @@ enum HostCommand {
 enum ReleaseCommand {
     /// Show the current release: its version, commit, channel protocol version, supervisors, CLIs and guest images.
     Current,
+}
+
+#[derive(Subcommand)]
+enum LimitsCommand {
+    /// Print the limits profile the tenant runs under and its source: Free, Configured or Custom.
+    Get,
+    /// Run the tenant under a profile of its own. A Free tenant may set values at or below the Free preset only.
+    Set {
+        /// The `TenantLimitsProfile` JSON file.
+        #[arg(long)]
+        file: PathBuf,
+    },
+    /// Drop the tenant's own profile, so it runs under the preset of its tier. The tier never changes.
+    Reset,
 }
 
 #[derive(Subcommand)]
@@ -1854,6 +1874,7 @@ fn main() -> ExitCode {
             Command::Invitation { command } => members::invitation(command).await,
             Command::Devices { command } => devices(command).await,
             Command::Host { command } => host(command).await,
+            Command::Limits { command } => limits::limits(command).await,
             Command::Harness { command } => resources::harnesses(command).await,
             Command::Release { command } => release(command).await,
             Command::Persona { command } => resources::personas(command).await,
