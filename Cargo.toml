@@ -6,7 +6,7 @@ description = "The command line client for tumpel: sign in, configure a tenant a
 readme = "README.md"
 license = "Apache-2.0"
 repository = "https://github.com/tumpel/cli"
-include = ["/Cargo.toml", "/Cargo.lock", "/README.md", "/LICENSE", "/NOTICE", "/build.rs", "/release_version.rs", "/src/**"]
+publish = false
 
 [[bin]]
 name = "tumpel"
