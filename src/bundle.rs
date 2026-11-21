@@ -95,7 +95,7 @@ pub async fn upload(client: &Client, bytes: &[u8], rerun: &str) -> Result<(Sha25
         Err(error) => return Err(error).context("asking for a presigned persona file upload"),
     };
     let response = reqwest::Client::new()
-        .put(&presigned.upload_url)
+        .put(presigned.upload_url.as_str())
         .body(bytes.to_vec())
         .send()
         .await
