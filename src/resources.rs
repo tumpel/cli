@@ -123,6 +123,7 @@ struct PersonaChange {
     box_memory_mib: Option<i32>,
     box_disk_mib: Option<i32>,
     box_retention: Option<String>,
+    tumpel_mcp: Option<bool>,
 }
 
 async fn persona_update(client: &Client, url: &str, id: &EntityId, change: PersonaChange) -> Result<PersonaUpdate> {
@@ -135,6 +136,7 @@ async fn persona_update(client: &Client, url: &str, id: &EntityId, change: Perso
         box_memory_mib,
         box_disk_mib,
         box_retention,
+        tumpel_mcp,
     } = change;
     let current = answered(client.personas_get(id).await, || url.to_string())?;
     let files = if persona_file.is_empty() {
@@ -175,7 +177,7 @@ async fn persona_update(client: &Client, url: &str, id: &EntityId, change: Perso
         files,
         name: name.map_or(Ok(current.name), |name| parsed("--name", &name))?,
         secret_set_id: secret_set_id.map_or(Ok(current.secret_set_id), |raw| entity_id(&raw, "secret set"))?,
-        tumpel_mcp: Some(current.tumpel_mcp),
+        tumpel_mcp: Some(tumpel_mcp.unwrap_or(current.tumpel_mcp)),
     })
 }
 
@@ -361,6 +363,7 @@ pub async fn personas(command: PersonaCommand) -> Result<()> {
             box_memory_mib,
             box_disk_mib,
             box_retention,
+            tumpel_mcp,
         } => {
             let id = entity_id(&persona_id, "persona")?;
             let url = format!("{endpoint}/v1/personas/{persona_id}");
@@ -380,6 +383,7 @@ pub async fn personas(command: PersonaCommand) -> Result<()> {
                             box_memory_mib,
                             box_disk_mib,
                             box_retention,
+                            tumpel_mcp,
                         },
                     )
                     .await?
