@@ -294,7 +294,7 @@ enum HostCommand {
         /// The `hostId` that tumpel host list prints.
         host_id: String,
     },
-    /// Restore an Unhealthy or RateLimited host to Healthy, so it gets turn offers again.
+    /// Restore an unhealthy or rate-limited host to healthy, so it gets turn offers again.
     RestoreHealth {
         /// The `hostId` that tumpel host list prints.
         host_id: String,
@@ -1475,7 +1475,7 @@ async fn approve_with_service_token(endpoint: &str, proof: &CliProofCredentials,
         .build()
         .context("building the HTTP client")?;
     let decision = DeviceApproval {
-        user_code: user_code.to_string(),
+        user_code: sessions::parsed("code", user_code)?,
         tenant_id: proof_tenant_id(&proof.client_id)?,
     };
     answered(
@@ -1536,10 +1536,11 @@ async fn login(endpoint: Option<String>, name: Option<String>) -> Result<()> {
                 let token = granted
                     .into_inner()
                     .access_token
+                    .to_string()
                     .try_into()
                     .map_err(|error| anyhow::anyhow!("the control plane issued an empty token: {error}"))?;
                 let path = config::save_login(&CliCredentials {
-                    endpoint: endpoint.clone(),
+                    endpoint: sessions::parsed("--endpoint", &endpoint)?,
                     token,
                 })?;
                 eprintln!("signed in; wrote {}", path.display());

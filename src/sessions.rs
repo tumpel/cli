@@ -453,7 +453,14 @@ async fn print_transcript(
             ),
         };
         let (printed, spent) = spend(remaining, texts.len());
-        for line in headed_lines(texts.into_iter().take(printed), read.compact, &mut headed) {
+        for line in headed_lines(
+            texts
+                .into_iter()
+                .take(printed)
+                .map(|(turn, text)| (turn, text.to_string())),
+            read.compact,
+            &mut headed,
+        ) {
             println!("{line}");
         }
         remaining = match spent {

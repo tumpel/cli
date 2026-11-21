@@ -218,7 +218,7 @@ async fn persona_file_patch(client: &Client, change: PersonaFileChange) -> Resul
     }
     Ok(EditPersonaFilePatch {
         kind: EditPersonaFilePatchKind::Edit,
-        new_text: new_text.unwrap_or_default(),
+        new_text: parsed("--new-text", &new_text.unwrap_or_default())?,
         old_text: parsed("--old-text", &old_text.unwrap_or_default())?,
         path: parsed("--edit", &edit.unwrap_or_default())?,
     }

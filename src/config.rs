@@ -84,7 +84,10 @@ pub fn load_credentials() -> Result<CliCredentials> {
         )
     })?;
     Ok(CliCredentials {
-        endpoint: endpoint.trim_end_matches('/').to_string(),
+        endpoint: endpoint
+            .trim_end_matches('/')
+            .parse()
+            .map_err(|error| anyhow::anyhow!("{ENDPOINT_KEY} {endpoint:?} is not a valid URL: {error}"))?,
         token,
     })
 }
