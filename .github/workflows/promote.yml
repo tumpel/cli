@@ -38,11 +38,6 @@ jobs:
       - name: Install the pinned Rust toolchain
         run: rustup toolchain install
 
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: release
-          save-if: false
-
       - name: Stamp the version into the crate
         run: sed -i "0,/^version = \".*\"$/s//version = \"$TUMPEL_RELEASE_VERSION\"/" Cargo.toml
 
