@@ -2106,7 +2106,7 @@ dependencies = [
 [[package]]
 name = "tumpel-api"
 version = "0.20.1"
-source = "git+https://github.com/tumpel/protocol?tag=v0.21.0-rc.20#2cbf7cee20d58e8f0f6d8e52615f545d0ee386ef"
+source = "git+https://github.com/tumpel/protocol?tag=v0.21.0-rc.29#1babd3573f3381785ac2bc804227d1c8307c3e92"
 dependencies = [
  "chrono",
  "progenitor-client",
