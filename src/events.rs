@@ -8,7 +8,7 @@ use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::{Error as WsError, Message};
 use tumpel_api::types::{EntityId, Sequence, TenantEventType};
 
-const MOST_WAIT_SECONDS: u64 = 50;
+const POLL_INTERVAL: Duration = Duration::from_secs(2);
 const RECONNECT_AFTER: Duration = Duration::from_secs(1);
 
 pub async fn events(command: EventsCommand) -> Result<()> {
@@ -62,12 +62,10 @@ async fn wait(
     let deadline = Instant::now() + Duration::from_secs(timeout_seconds);
     let mut cursor = after_event_id;
     loop {
-        let left = deadline.saturating_duration_since(Instant::now()).as_secs();
-        let wait_seconds = i32::try_from(left.min(MOST_WAIT_SECONDS))?;
         let after = cursor.map(Sequence);
         let page = shown(
             client
-                .events_list(after.as_ref(), types.as_ref(), session.as_ref(), None, wait_seconds)
+                .events_list(after.as_ref(), types.as_ref(), session.as_ref(), None)
                 .await,
             || format!("{endpoint}/v1/events"),
         )?;
@@ -83,11 +81,13 @@ async fn wait(
             return print_json(found);
         }
         cursor = page.get("lastEventId").and_then(serde_json::Value::as_i64);
-        if left == 0 {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
             bail!(
                 "No matching event happened within {timeout_seconds} seconds. Run the command again to keep waiting."
             );
         }
+        tokio::time::sleep(POLL_INTERVAL.min(left)).await;
     }
 }
 
@@ -104,7 +104,6 @@ fn follow_url(
         .map_err(|()| anyhow::anyhow!("the stored endpoint {endpoint} cannot carry a WebSocket; run tumpel login"))?;
     {
         let mut query = url.query_pairs_mut();
-        query.append_pair("waitSeconds", "0");
         if let Some(after) = after_event_id {
             query.append_pair("afterEventId", &after.to_string());
         }
@@ -174,7 +173,7 @@ mod tests {
         )?;
         assert_eq!(
             url,
-            "wss://tumpel.example/v1/events?waitSeconds=0&afterEventId=7&event=TurnCompleted&event=TurnFailed&sessionId=s1"
+            "wss://tumpel.example/v1/events?afterEventId=7&event=TurnCompleted&event=TurnFailed&sessionId=s1"
         );
         Ok(())
     }

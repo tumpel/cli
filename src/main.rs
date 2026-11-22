@@ -1,10 +1,10 @@
 mod bundle;
-mod circleci_authorize;
 mod claude_setups;
 mod config;
 mod connections;
 mod connectors;
 mod events;
+mod limits;
 mod members;
 mod metrics;
 mod openrouter;
@@ -70,6 +70,11 @@ enum Command {
     Host {
         #[command(subcommand)]
         command: HostCommand,
+    },
+    /// Read the limits the tenant runs under, or set them (Owner only).
+    Limits {
+        #[command(subcommand)]
+        command: LimitsCommand,
     },
     /// List the harness catalog and pin a harness to one of its versions.
     Harness {
@@ -155,16 +160,6 @@ enum Command {
     Connection {
         #[command(subcommand)]
         command: ConnectionCommand,
-    },
-    /// Connect your GitHub Actions account as a build provider, or read or remove it.
-    GithubActions {
-        #[command(subcommand)]
-        command: GithubActionsCommand,
-    },
-    /// Connect your CircleCI organization as a build provider, bind repositories to its projects, or read or remove them.
-    Circleci {
-        #[command(subcommand)]
-        command: CircleciCommand,
     },
     /// Connect your Namespace workspace as a build provider, or read or remove it.
     Namespace {
@@ -306,6 +301,20 @@ enum HostCommand {
 enum ReleaseCommand {
     /// Show the current release: its version, commit, channel protocol version, supervisors, CLIs and guest images.
     Current,
+}
+
+#[derive(Subcommand)]
+enum LimitsCommand {
+    /// Print the limits profile the tenant runs under and its source: Free, Configured or Custom.
+    Get,
+    /// Run the tenant under a profile of its own. A Free tenant may set values at or below the Free preset only.
+    Set {
+        /// The `TenantLimitsProfile` JSON file.
+        #[arg(long)]
+        file: PathBuf,
+    },
+    /// Drop the tenant's own profile, so it runs under the preset of its tier. The tier never changes.
+    Reset,
 }
 
 #[derive(Subcommand)]
@@ -1018,15 +1027,6 @@ enum TurnCommand {
         /// The turnId tumpel turn list prints.
         turn_id: String,
     },
-    /// Wait until the first of up to 50 turns of any of your sessions is Completed or Failed, then show every turn; a Failed turn shows why it failed.
-    Wait {
-        /// The turnIds tumpel turn list prints.
-        #[arg(required = true)]
-        turn_ids: Vec<String>,
-        /// The most seconds to wait, from 0 to 50; every turn shows once they pass, even when none ended.
-        #[arg(long)]
-        timeout_seconds: i32,
-    },
 }
 
 #[derive(Subcommand)]
@@ -1139,23 +1139,6 @@ enum ConnectionCommand {
 }
 
 #[derive(Subcommand)]
-enum GithubActionsCommand {
-    /// Show the GitHub Actions connection.
-    Get,
-    /// Connect your GitHub Actions account, replacing an earlier connection.
-    Start {
-        /// The account GitHub Actions bills, as you name it.
-        #[arg(long)]
-        account_label: String,
-        /// The caller workflow each repository holds, such as `.github/workflows/tumpel-prebuild.yml`.
-        #[arg(long)]
-        caller_workflow: String,
-    },
-    /// Disconnect the GitHub Actions build provider.
-    Delete,
-}
-
-#[derive(Subcommand)]
 enum OpenrouterCommand {
     /// Start an authorization for a secret set: prints it with the `authorizeUrl` to open; OpenRouter sends the browser back to the control plane, which stores the key as `OPENROUTER_API_KEY`.
     Authorize {
@@ -1167,78 +1150,6 @@ enum OpenrouterCommand {
     GetAuthorization {
         /// The `openRouterAuthorizationId` that tumpel openrouter authorize printed.
         open_router_authorization_id: String,
-    },
-}
-
-#[derive(Subcommand)]
-enum CircleciCommand {
-    /// Show the CircleCI connection, the orb and the config each repository commits; the token is never shown.
-    Get,
-    /// Connect your CircleCI organization through CircleCI's consent page: prints the address to open, listens on 127.0.0.1 for the redirect, and connects; replaces an earlier connection.
-    Authorize {
-        /// The organization to connect when the token reads several; asked on the terminal when left out.
-        #[arg(long)]
-        organization_id: Option<String>,
-    },
-    /// Finish an authorization with the address the browser landed on, piped on stdin, for a machine where tumpel circleci authorize cannot listen.
-    Complete {
-        /// The `circleCIAuthorizationId` that `tumpel_circleci_authorize` answered.
-        #[arg(long = "circleci-authorization-id")]
-        circle_ci_authorization_id: String,
-        /// Read the redirect address from stdin; it carries a one-time code and is never an argument.
-        #[arg(long)]
-        stdin: bool,
-    },
-    /// Connect one of the organizations a `ChoosingOrganization` authorization lists.
-    Choose {
-        /// The `circleCIAuthorizationId` of the authorization.
-        #[arg(long = "circleci-authorization-id")]
-        circle_ci_authorization_id: String,
-        /// One organizationId the authorization lists.
-        #[arg(long)]
-        organization_id: String,
-    },
-    /// Connect your CircleCI organization with a personal API token piped on stdin, the fallback to authorize; replaces an earlier connection.
-    Start {
-        /// The CircleCI organization that bills the builds, as you name it.
-        #[arg(long)]
-        account_label: String,
-        /// The organization id from CircleCI's Organization Settings > Overview.
-        #[arg(long)]
-        organization_id: String,
-        /// Read the personal API token from stdin; it is never taken as an argument.
-        #[arg(long)]
-        token_stdin: bool,
-    },
-    /// Disconnect the CircleCI build provider and delete its project bindings.
-    Delete,
-    /// Bind repositories to their CircleCI project, or list or remove the bindings.
-    Project {
-        #[command(subcommand)]
-        command: CircleciProjectCommand,
-    },
-}
-
-#[derive(Subcommand)]
-enum CircleciProjectCommand {
-    /// List the repositories bound to a CircleCI project.
-    List,
-    /// Bind a repository to its CircleCI project and pipeline definition, once.
-    Add {
-        /// The GitHub repository, as `https://github.com/owner/name`.
-        #[arg(long)]
-        repository: String,
-        /// `gh/<owner>/<name>` in a GitHub OAuth organization, `circleci/<org id>/<project id>` in a GitHub App organization.
-        #[arg(long)]
-        project_slug: String,
-        /// The pipeline definition that checks out the repository, from Project Settings > Project Setup.
-        #[arg(long)]
-        pipeline_definition_id: String,
-    },
-    /// Delete a repository's CircleCI project binding.
-    Delete {
-        /// The circleCIProjectId tumpel circleci project list prints.
-        circle_ci_project_id: String,
     },
 }
 
@@ -1296,9 +1207,6 @@ enum PrebuildCommand {
         /// The `personaId` whose secret set's `GITHUB_TOKEN` reads the repository when the GitHub App does not cover it.
         #[arg(long)]
         persona_id: String,
-        /// The connected build provider that runs the job: `GitHubActions`, `CircleCI` or `Namespace`.
-        #[arg(long)]
-        provider: String,
         /// Start a job even when a prebuild with the same key is stored or running.
         #[arg(long)]
         rebuild: bool,
@@ -1861,6 +1769,7 @@ fn main() -> ExitCode {
             Command::Invitation { command } => members::invitation(command).await,
             Command::Devices { command } => devices(command).await,
             Command::Host { command } => host(command).await,
+            Command::Limits { command } => limits::limits(command).await,
             Command::Harness { command } => resources::harnesses(command).await,
             Command::Release { command } => release(command).await,
             Command::Persona { command } => resources::personas(command).await,
@@ -1882,8 +1791,6 @@ fn main() -> ExitCode {
             Command::Openrouter { command } => openrouter::openrouter(command).await,
             Command::OauthGrant { command } => connections::oauth_grant(command).await,
             Command::Connection { command } => connections::connection(command).await,
-            Command::GithubActions { command } => connections::github_actions(command).await,
-            Command::Circleci { command } => connections::circleci(command).await,
             Command::Namespace { command } => connections::namespace(command).await,
         }
     });

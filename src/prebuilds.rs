@@ -2,7 +2,7 @@ use crate::sessions::{id, parsed};
 use crate::{print_json, shown, signed_in, PrebuildCommand, PrebuildTemplateCommand};
 use anyhow::{Context, Result};
 use tumpel_api::types::{
-    PrebuildPreviewOfRepository, PrebuildPreviewOfRepositorySource, PrebuildPreviewOfSupplied,
+    BuildProvider, PrebuildPreviewOfRepository, PrebuildPreviewOfRepositorySource, PrebuildPreviewOfSupplied,
     PrebuildPreviewOfSuppliedSource, PrebuildPreviewRequest, PrebuildStart, PrebuildTemplateId,
     PrebuildTemplatePullRequestOpen, PrebuildTemplateVersionNumber, RepositoryUrl,
 };
@@ -14,13 +14,12 @@ pub async fn prebuild(command: PrebuildCommand) -> Result<()> {
         PrebuildCommand::Start {
             repository,
             persona_id,
-            provider,
             rebuild,
         } => {
             let body = PrebuildStart {
                 repository: parsed("--repository", &repository)?,
                 persona_id: id("--persona-id", &persona_id)?,
-                provider: parsed("--provider", &provider)?,
+                provider: BuildProvider::Namespace,
                 rebuild: Some(rebuild),
             };
             print_json(&shown(client.prebuilds_start(&body).await, || {
