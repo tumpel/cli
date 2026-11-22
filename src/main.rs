@@ -1037,15 +1037,6 @@ enum TurnCommand {
         /// The turnId tumpel turn list prints.
         turn_id: String,
     },
-    /// Wait until the first of up to 50 turns of any of your sessions is Completed or Failed, then show every turn; a Failed turn shows why it failed.
-    Wait {
-        /// The turnIds tumpel turn list prints.
-        #[arg(required = true)]
-        turn_ids: Vec<String>,
-        /// The most seconds to wait, from 0 to 50; every turn shows once they pass, even when none ended.
-        #[arg(long)]
-        timeout_seconds: i32,
-    },
 }
 
 #[derive(Subcommand)]
