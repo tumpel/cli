@@ -256,18 +256,6 @@ pub async fn turn(command: TurnCommand) -> Result<()> {
                 format!("{endpoint}/v1/turns/{turn_id}/failure")
             })?)
         }
-        TurnCommand::Wait {
-            turn_ids,
-            timeout_seconds,
-        } => {
-            let turns = turn_ids
-                .iter()
-                .map(|turn_id| id("turnId", turn_id))
-                .collect::<Result<Vec<_>>>()?;
-            print_json(&shown(client.turns_wait(timeout_seconds, &turns).await, || {
-                format!("{endpoint}/v1/turns/wait")
-            })?)
-        }
     }
 }
 
