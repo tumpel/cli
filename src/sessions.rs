@@ -1,5 +1,5 @@
 use crate::{
-    answered, print_json, problem_text, shown, signed_in, SessionCommand, SnapshotCommand, TranscriptArgs,
+    answered, print_json, problem_text, shown, signed_in, ProblemText, SessionCommand, SnapshotCommand, TranscriptArgs,
     TranscriptCommand, TurnCommand,
 };
 use anyhow::{bail, Result};
@@ -324,7 +324,7 @@ async fn archive(
     let mut refused = Vec::new();
     for session in &sessions {
         match client.sessions_archive(session).await {
-            Err(Error::ErrorResponse(problem)) => {
+            Err(Error::ErrorResponse(problem)) if !problem.is_unrecognised() => {
                 refused.push(format!("session {}: {}", **session, problem_text(&problem)));
             }
             outcome => archived.push(shown(outcome, || {

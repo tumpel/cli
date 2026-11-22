@@ -161,11 +161,6 @@ enum Command {
         #[command(subcommand)]
         command: ConnectionCommand,
     },
-    /// Connect your Namespace workspace as a build provider, or read or remove it.
-    Namespace {
-        #[command(subcommand)]
-        command: NamespaceCommand,
-    },
     /// Start or read the prebuilds that install a repository's dependencies ahead of its sessions.
     Prebuild {
         #[command(subcommand)]
@@ -1154,23 +1149,6 @@ enum OpenrouterCommand {
 }
 
 #[derive(Subcommand)]
-enum NamespaceCommand {
-    /// Show the issuer, subject pattern and audience Namespace trusts.
-    Get,
-    /// Connect your Namespace workspace, replacing an earlier connection.
-    Start {
-        /// The Namespace workspace that bills the builds, as you name it.
-        #[arg(long)]
-        account_label: String,
-        /// The workspace id, such as `tenant_123456789ab`, that the builds run in.
-        #[arg(long)]
-        workspace_id: String,
-    },
-    /// Disconnect the Namespace build provider.
-    Delete,
-}
-
-#[derive(Subcommand)]
 enum ClaudeSetupCommand {
     /// Start a box that runs claude setup-token; read it with get until it shows the sign-in URL.
     Start {
@@ -1533,8 +1511,9 @@ fn answered<T, P: ProblemText + Send + Sync + 'static>(
         Ok(answer) => Ok(answer.into_inner()),
         Err(Error::ErrorResponse(problem)) if problem.is_unrecognised() => Err(unrecognised_response(&call()).into()),
         Err(Error::ErrorResponse(problem)) => bail!("{}", problem.text()),
-        Err(Error::UnexpectedResponse(_)) => Err(unrecognised_response(&call()).into()),
-        Err(Error::InvalidResponsePayload(_, _)) => Err(unrecognised_response(&call()).into()),
+        Err(Error::UnexpectedResponse(_) | Error::InvalidResponsePayload(_, _)) => {
+            Err(unrecognised_response(&call()).into())
+        }
         Err(error) => Err(error).with_context(|| format!("calling {}", call())),
     }
 }
@@ -1791,7 +1770,6 @@ fn main() -> ExitCode {
             Command::Openrouter { command } => openrouter::openrouter(command).await,
             Command::OauthGrant { command } => connections::oauth_grant(command).await,
             Command::Connection { command } => connections::connection(command).await,
-            Command::Namespace { command } => connections::namespace(command).await,
         }
     });
     match outcome {

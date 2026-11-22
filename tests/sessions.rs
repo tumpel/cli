@@ -16,7 +16,21 @@ fn scenario(args: &[&str], path: &str, status: u16, body: &str) -> (Output, Stri
                 assert_eq!(connection.read(&mut byte).unwrap(), 1);
                 request.push(byte[0]);
             }
-            assert!(String::from_utf8(request).unwrap().starts_with(&format!("GET {path} HTTP/1.1\r\n")));
+            let request = String::from_utf8(request).unwrap();
+            let method = match args[1] {
+                "start" | "start-from-issue" | "stop" | "archive" => "POST",
+                "set-tags" => "PUT",
+                "patch-tags" => "PATCH",
+                "delete" => "DELETE",
+                _ => "GET",
+            };
+            assert!(request.starts_with(&format!("{method} {path} HTTP/1.1\r\n")), "{request}");
+            let length = request.lines().find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("content-length").then(|| value.trim().parse::<usize>().unwrap())
+            }).unwrap_or(0);
+            let mut body_bytes = vec![0; length];
+            connection.read_exact(&mut body_bytes).unwrap();
             write!(connection, "HTTP/1.1 {status} Stub\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
         });
         let output = Command::new(env!("CARGO_BIN_EXE_tumpel"))
@@ -44,7 +58,7 @@ fn session() -> Value {
         "startedBy": {"kind": "Person", "principalId": "principal-1"},
         "tags": [], "harness": "ClaudeCode", "harnessVersion": "1", "model": "sonnet",
         "state": "Idle", "lastTurnId": "turn-1", "lastTurnState": "Completed",
-        "lastTurnAt": "2026-11-21T00:00:00+00:00", "boxRetention": "Warm",
+        "lastTurnAt": "2026-11-21T00:00:00Z", "boxRetention": "Warm",
         "lastTurn": {
             "turnId": "turn-1", "tenantId": "tenant-1", "sessionId": "session-1", "boxId": "box-1",
             "prompt": "build", "state": "Completed", "lineCount": 0, "createdAt": 1, "updatedAt": 2
@@ -98,7 +112,7 @@ fn sessions_fail_with_code_three_and_only_the_update_message_on_unreadable_respo
             let (output, notice) = scenario(&args, path, status, body);
             assert_eq!(output.status.code(), Some(3));
             assert_eq!(String::from_utf8(output.stderr).unwrap(), notice);
-            assert!(output.stdout.is_empty());
+            assert_eq!(output.stdout, b"");
         }
     }
 }
@@ -125,7 +139,7 @@ fn session_get_preserves_an_unknown_failure_reason() {
     body["lastTurn"]["state"] = json!("Failed");
     body["lastTurn"]["reason"] = json!("FutureFailureReason");
     body["lastTurn"]["detail"] = json!("future failure");
-    body["lastTurn"]["failedAt"] = json!("2026-11-21T00:00:00+00:00");
+    body["lastTurn"]["failedAt"] = json!("2026-11-21T00:00:00Z");
     let (output, notice) = scenario(
         &["session", "get", "session-1"],
         "/v1/sessions/session-1",
@@ -143,5 +157,106 @@ fn an_unknown_session_refusal_prints_only_the_update_message() {
     let (output, notice) = scenario(&["session", "get", "session-1"], "/v1/sessions/session-1", 400, body);
     assert_eq!(output.status.code(), Some(3));
     assert_eq!(String::from_utf8(output.stderr).unwrap(), notice);
-    assert!(output.stdout.is_empty());
+    assert_eq!(output.stdout, b"");
+}
+
+#[test]
+fn session_commands_preserve_printable_future_responses() {
+    for (args, path) in [
+        (
+            vec![
+                "session",
+                "start",
+                "--repository",
+                "https://github.com/tumpel/cli",
+                "--model",
+                "sonnet",
+                "--persona-id",
+                "persona-1",
+                "--prompt",
+                "build",
+            ],
+            "/v1/sessions",
+        ),
+        (
+            vec![
+                "session",
+                "start-from-issue",
+                "--owner",
+                "tumpel",
+                "--name",
+                "cli",
+                "--issue-number",
+                "1",
+                "--model",
+                "sonnet",
+                "--persona-id",
+                "persona-1",
+            ],
+            "/v1/sessions/from-issue",
+        ),
+        (vec!["session", "stop", "session-1"], "/v1/sessions/session-1/stop"),
+        (
+            vec!["session", "set-tags", "session-1", "team:cli"],
+            "/v1/sessions/session-1/tags",
+        ),
+        (
+            vec!["session", "patch-tags", "session-1", "--add", "team:cli"],
+            "/v1/sessions/session-1/tags",
+        ),
+        (
+            vec!["session", "archive", "session-1"],
+            "/v1/sessions/session-1/archive",
+        ),
+        (
+            vec!["session", "stop-failures", "session-1"],
+            "/v1/sessions/session-1/stop-failures",
+        ),
+        (
+            vec!["session", "handovers", "session-1"],
+            "/v1/sessions/session-1/credential-handovers",
+        ),
+    ] {
+        let (output, notice) = scenario(&args, path, 200, r#"{"future":"response"}"#);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(String::from_utf8(output.stderr).unwrap(), notice);
+        assert_eq!(
+            serde_json::from_slice::<Value>(&output.stdout).unwrap(),
+            json!({"future":"response"})
+        );
+    }
+}
+
+#[test]
+fn session_delete_and_bulk_archive_stop_on_unrecognised_responses() {
+    for (args, path) in [
+        (vec!["session", "delete", "session-1"], "/v1/sessions/session-1"),
+        (
+            vec!["session", "archive", "session-1", "session-2"],
+            "/v1/sessions/session-1/archive",
+        ),
+    ] {
+        let body = r#"{"code":"FutureRefusal","title":"New refusal","detail":"future detail","fix":"future fix"}"#;
+        let (output, notice) = scenario(&args, path, 400, body);
+        assert_eq!(output.status.code(), Some(3));
+        assert_eq!(String::from_utf8(output.stderr).unwrap(), notice);
+        assert_eq!(output.stdout, b"");
+    }
+}
+
+#[test]
+fn a_known_session_refusal_keeps_its_explanation_and_exit_code() {
+    let body = r#"{"code":"GitHubAppPermissionMissing","title":"Permission missing","detail":"cannot read the repository","fix":"grant access"}"#;
+    let (output, _) = scenario(&["session", "get", "session-1"], "/v1/sessions/session-1", 400, body);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        String::from_utf8(output.stderr).unwrap(),
+        "tumpel: Permission missing: cannot read the repository. grant access\n"
+    );
+    assert_eq!(output.stdout, b"");
 }
