@@ -45,7 +45,7 @@ fn harness(raw: &str) -> Result<Harness> {
 }
 
 fn secrets_from_env(secret_set: &ConfigSecretSet) -> Result<Vec<SecretValue>> {
-    let values = tenant_config::secret_values([secret_set], |name| std::env::var(name).ok());
+    let values = tenant_config::secret_values([secret_set], |name| std::env::var(name).ok())?;
     tenant_config::with_values(secret_set, &values)
 }
 
@@ -141,22 +141,25 @@ async fn persona_update(client: &Client, url: &str, id: &EntityId, change: Perso
         current
             .files
             .into_iter()
-            .map(|held| match held {
-                PersonaFile::InlinePersonaFileRead(held) => InlinePersonaFile {
-                    content: held.content,
-                    path: held.path,
-                    source: InlinePersonaFileSource::Inline,
-                }
-                .into(),
-                PersonaFile::StoredPersonaFileRead(held) => StoredPersonaFile {
-                    digest: held.digest,
-                    path: held.path,
-                    size_bytes: held.size_bytes,
-                    source: StoredPersonaFileSource::Stored,
-                }
-                .into(),
+            .map(|held| {
+                Ok(match held {
+                    PersonaFile::InlinePersonaFileRead(held) => InlinePersonaFile {
+                        content: held.content,
+                        path: held.path,
+                        source: InlinePersonaFileSource::Inline,
+                    }
+                    .into(),
+                    PersonaFile::StoredPersonaFileRead(held) => StoredPersonaFile {
+                        digest: held.digest,
+                        path: held.path,
+                        size_bytes: held.size_bytes,
+                        source: StoredPersonaFileSource::Stored,
+                    }
+                    .into(),
+                    PersonaFile::Unrecognised(_) => return Err(crate::unrecognised_response(url).into()),
+                })
             })
-            .collect()
+            .collect::<Result<_>>()?
     } else {
         persona_files(client, &persona_file, "tumpel persona update").await?
     };
@@ -228,7 +231,7 @@ async fn persona_file_patch(client: &Client, change: PersonaFileChange) -> Resul
 fn kept_members(secret_set: &ConfigSecretSet) -> Result<Vec<SecretMemberUpdate>> {
     tenant_config::with_kept_values(
         secret_set,
-        &tenant_config::secret_values([secret_set], |name| std::env::var(name).ok()),
+        &tenant_config::secret_values([secret_set], |name| std::env::var(name).ok())?,
     )
 }
 
@@ -253,7 +256,19 @@ pub async fn host_get(host_id: String) -> Result<()> {
         format!("{}/v1/hosts/{host_id}", credentials.endpoint)
     })?;
     print_json(&host)?;
-    if let SupervisorUpdateLatestStep::StepReported(reported) = &host.supervisor_update_step {
+    let step = match &host {
+        tumpel_api::types::Host::OnlineHost(host) => &host.supervisor_update_step,
+        tumpel_api::types::Host::DegradedHost(host) => &host.supervisor_update_step,
+        tumpel_api::types::Host::OfflineHost(host) => &host.supervisor_update_step,
+        tumpel_api::types::Host::Unrecognised(_) => {
+            crate::update_message(&crate::unrecognised_response(&credentials.endpoint));
+            return Ok(());
+        }
+    };
+    if matches!(step, SupervisorUpdateLatestStep::Unrecognised(_)) {
+        crate::update_message(&crate::unrecognised_response(&credentials.endpoint));
+    }
+    if let SupervisorUpdateLatestStep::StepReported(reported) = step {
         if reported.step.phase == SupervisorUpdatePhase::Staged {
             eprintln!(
                 "Update to {} staged, waiting for {} boxes",

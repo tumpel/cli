@@ -1,6 +1,6 @@
 use crate::{
-    answered, print_json, problem_text, shown, signed_in, ProblemText, SessionCommand, SnapshotCommand, TranscriptArgs,
-    TranscriptCommand, TurnCommand,
+    answered, print_json, problem_text, response, shown, signed_in, ApiResponse, SessionCommand, SnapshotCommand,
+    TranscriptArgs, TranscriptCommand, TurnCommand,
 };
 use anyhow::{bail, Result};
 use chrono::{DateTime, FixedOffset};
@@ -8,10 +8,11 @@ use std::num::NonZeroU32;
 use std::str::FromStr;
 use std::time::Duration;
 use tumpel_api::types::{
-    BoxRetention, EntityId, SessionStart, SessionStartFromIssue, SessionState, SessionTag, SessionTags,
-    SessionTagsPatch, SteerCreate, TranscriptPage, Turn, TurnSend,
+    BoxRetention, EntityId, Problem, Session, SessionStart, SessionStartFromIssue, SessionState, SessionTag,
+    SessionTags, SessionTagsPatch, StartedSession, StartedSessionFromIssue, SteerCreate, TranscriptPage, Turn,
+    TurnFailureReason, TurnSend,
 };
-use tumpel_api::{Client, Error};
+use tumpel_api::{Client, Error, ResponseValue};
 
 const FIRST_BACKOFF: Duration = Duration::from_millis(250);
 const MAX_BACKOFF: Duration = Duration::from_secs(5);
@@ -39,14 +40,87 @@ pub(crate) fn tags(flag: &str, values: &[String]) -> Result<Vec<SessionTag>> {
     values.iter().map(|value| parsed(flag, value)).collect()
 }
 
+fn session_parts<'a>(
+    session: &'a Session,
+    endpoint: &str,
+) -> Result<(&'a EntityId, &'a Turn), crate::UnrecognisedResponse> {
+    Ok(match session {
+        Session::StartingSession(session) => (&session.session_id, &session.last_turn),
+        Session::IdleSession(session) => (&session.session_id, &session.last_turn),
+        Session::RunningSession(session) => (&session.session_id, &session.last_turn),
+        Session::StoppingSession(session) => (&session.session_id, &session.last_turn),
+        Session::StoppedSession(session) => (&session.session_id, &session.last_turn),
+        Session::ArchivedSession(session) => (&session.session_id, &session.last_turn),
+        Session::FailedSession(session) => (&session.session_id, &session.last_turn),
+        Session::UnknownSession(session) => (&session.session_id, &session.last_turn),
+        Session::Unrecognised(_) => return Err(crate::unrecognised_response(endpoint)),
+    })
+}
+
+trait SessionOutput: serde::Serialize {
+    fn sessions(&self) -> &[Session];
+}
+
+impl SessionOutput for Session {
+    fn sessions(&self) -> &[Session] {
+        std::slice::from_ref(self)
+    }
+}
+
+impl SessionOutput for Vec<Session> {
+    fn sessions(&self) -> &[Session] {
+        self
+    }
+}
+
+impl SessionOutput for StartedSession {
+    fn sessions(&self) -> &[Session] {
+        std::slice::from_ref(&self.session)
+    }
+}
+
+impl SessionOutput for StartedSessionFromIssue {
+    fn sessions(&self) -> &[Session] {
+        std::slice::from_ref(&self.session)
+    }
+}
+
+fn shown_sessions<T: SessionOutput>(
+    outcome: Result<ResponseValue<T>, Error<Problem>>,
+    call: impl FnOnce() -> String,
+) -> Result<serde_json::Value> {
+    let call = call();
+    let outcome = response(outcome, || call.clone())?;
+    session_output(outcome, &call)
+}
+
+fn session_output<T: SessionOutput>(outcome: ApiResponse<T, Problem>, call: &str) -> Result<serde_json::Value> {
+    if let ApiResponse::Answer(answer) = &outcome {
+        for session in answer.sessions() {
+            match session_parts(session, call) {
+                Err(response) => crate::update_message(&response),
+                Ok((_, turn)) => {
+                    if matches!(turn, Turn::Unrecognised(_))
+                        || matches!(turn, Turn::FailedTurn(turn) if matches!(turn.reason, TurnFailureReason::Unrecognised(_)))
+                    {
+                        crate::update_message(&crate::unrecognised_response(call));
+                    }
+                }
+            }
+        }
+    }
+    outcome.shown()
+}
+
 async fn set_tags(client: &Client, endpoint: &str, session_id: &str, values: &[String]) -> Result<()> {
     let session = id("sessionId", session_id)?;
     let body = SessionTags {
         tags: tags("tag", values)?,
     };
-    print_json(&shown(client.sessions_set_tags(&session, &body).await, || {
-        format!("{endpoint}/v1/sessions/{session_id}/tags")
-    })?)
+    print_json(&shown_sessions(
+        client.sessions_set_tags(&session, &body).await,
+        || format!("{endpoint}/v1/sessions/{session_id}/tags"),
+    )?)
 }
 
 async fn patch_tags(
@@ -61,9 +135,10 @@ async fn patch_tags(
         add: tags("--add", add)?,
         remove: tags("--remove", remove)?,
     };
-    print_json(&shown(client.sessions_patch_tags(&session, &body).await, || {
-        format!("{endpoint}/v1/sessions/{session_id}/tags")
-    })?)
+    print_json(&shown_sessions(
+        client.sessions_patch_tags(&session, &body).await,
+        || format!("{endpoint}/v1/sessions/{session_id}/tags"),
+    )?)
 }
 
 pub async fn session(command: SessionCommand) -> Result<()> {
@@ -86,7 +161,7 @@ pub async fn session(command: SessionCommand) -> Result<()> {
                 repository: parsed("--repository", &repository)?,
                 tags: tags("--tag", &tag)?,
             };
-            print_json(&shown(client.sessions_start(&body).await, || {
+            print_json(&shown_sessions(client.sessions_start(&body).await, || {
                 format!("{endpoint}/v1/sessions")
             })?)
         }
@@ -108,13 +183,13 @@ pub async fn session(command: SessionCommand) -> Result<()> {
                 name: parsed("--name", &name)?,
                 tags: tags("--tag", &tag)?,
             };
-            print_json(&shown(client.sessions_start_from_issue(&body).await, || {
+            print_json(&shown_sessions(client.sessions_start_from_issue(&body).await, || {
                 format!("{endpoint}/v1/sessions/from-issue")
             })?)
         }
         SessionCommand::Get { session_id } => {
             let session = id("sessionId", &session_id)?;
-            print_json(&shown(client.sessions_get(&session).await, || {
+            print_json(&shown_sessions(client.sessions_get(&session).await, || {
                 format!("{endpoint}/v1/sessions/{session_id}")
             })?)
         }
@@ -135,7 +210,7 @@ pub async fn session(command: SessionCommand) -> Result<()> {
             cancel_turn,
         } => {
             let session = id("sessionId", &session_id)?;
-            print_json(&shown(
+            print_json(&shown_sessions(
                 client.sessions_stop(&session, cancel_turn.then_some(true)).await,
                 || format!("{endpoint}/v1/sessions/{session_id}/stop"),
             )?)
@@ -185,7 +260,7 @@ async fn list(
         .transpose()?;
     let tags = tags("--tag", tag)?;
     let trigger = trigger.map(|value| id("--trigger", &value)).transpose()?;
-    print_json(&shown(
+    print_json(&shown_sessions(
         client
             .sessions_list(
                 host.as_ref(),
@@ -296,7 +371,7 @@ async fn archive(
 ) -> Result<()> {
     if let [session_id] = session_ids {
         let session = id("sessionId", session_id)?;
-        return print_json(&shown(client.sessions_archive(&session).await, || {
+        return print_json(&shown_sessions(client.sessions_archive(&session).await, || {
             format!("{endpoint}/v1/sessions/{session_id}/archive")
         })?);
     }
@@ -312,8 +387,8 @@ async fn archive(
             || format!("{endpoint}/v1/sessions"),
         )?
         .into_iter()
-        .map(|session| session.session_id)
-        .collect()
+        .map(|session| Ok(session_parts(&session, endpoint)?.0.clone()))
+        .collect::<Result<Vec<_>>>()?
     } else {
         session_ids
             .iter()
@@ -323,13 +398,13 @@ async fn archive(
     let mut archived = Vec::new();
     let mut refused = Vec::new();
     for session in &sessions {
-        match client.sessions_archive(session).await {
-            Err(Error::ErrorResponse(problem)) if !problem.is_unrecognised() => {
+        match response(client.sessions_archive(session).await, || {
+            format!("{endpoint}/v1/sessions/{}/archive", **session)
+        })? {
+            ApiResponse::Refusal(problem) => {
                 refused.push(format!("session {}: {}", **session, problem_text(&problem)));
             }
-            outcome => archived.push(shown(outcome, || {
-                format!("{endpoint}/v1/sessions/{}/archive", **session)
-            })?),
+            outcome => archived.push(session_output(outcome, endpoint)?),
         }
     }
     print_json(&archived)?;
@@ -373,6 +448,8 @@ pub async fn transcript(command: TranscriptCommand) -> Result<()> {
         Turn::RunningTurn(read) => read.session_id,
         Turn::CompletedTurn(read) => read.session_id,
         Turn::FailedTurn(read) => read.session_id,
+        Turn::UnknownTurn(read) => read.session_id,
+        Turn::Unrecognised(_) => return Err(crate::unrecognised_response(&endpoint).into()),
     };
     print_transcript(&client, &endpoint, session, Some(turn), read).await
 }
@@ -419,6 +496,7 @@ async fn print_transcript(
             || format!("{endpoint}/v1/sessions/{}/transcript", *session),
         )?;
         let (texts, page_cursor, finished) = match page {
+            TranscriptPage::Unrecognised(_) => return Err(crate::unrecognised_response(endpoint).into()),
             TranscriptPage::RawTranscriptPage(raw) => (
                 raw.lines
                     .into_iter()
@@ -462,18 +540,17 @@ async fn print_transcript(
             if !read.follow {
                 return Ok(());
             }
-            let last = match turn {
-                Some(turn) => answered(client.turns_get(&turn).await, || {
+            let last = if let Some(turn) = turn {
+                answered(client.turns_get(&turn).await, || {
                     format!("{endpoint}/v1/turns/{}", *turn)
-                })?,
-                None => {
-                    answered(client.sessions_get(&session).await, || {
-                        format!("{endpoint}/v1/sessions/{}", *session)
-                    })?
-                    .last_turn
-                }
+                })?
+            } else {
+                let answer = answered(client.sessions_get(&session).await, || {
+                    format!("{endpoint}/v1/sessions/{}", *session)
+                })?;
+                session_parts(&answer, endpoint)?.1.clone()
             };
-            if let Some(warning) = turn_outcome(last)? {
+            if let Some(warning) = turn_outcome(last, endpoint)? {
                 eprintln!("{warning}");
             }
             return Ok(());
@@ -490,8 +567,12 @@ async fn print_transcript(
     }
 }
 
-fn turn_outcome(last: Turn) -> Result<Option<String>> {
+fn turn_outcome(last: Turn, endpoint: &str) -> Result<Option<String>> {
     match last {
+        Turn::Unrecognised(_) => Err(crate::unrecognised_response(endpoint).into()),
+        Turn::FailedTurn(failed) if matches!(failed.reason, TurnFailureReason::Unrecognised(_)) => {
+            Err(crate::unrecognised_response(endpoint).into())
+        }
         Turn::FailedTurn(failed) => bail!(
             "turn {} failed with {}: {}",
             *failed.turn_id,
@@ -586,16 +667,27 @@ mod tests {
         };
         let warning = "the box disk of 32096 MiB is full, 12 MiB free; give the persona a larger boxDiskMib";
         assert_eq!(
-            turn_outcome(turn(serde_json::json!({ "state": "Completed", "warning": warning }))).expect("completed"),
+            turn_outcome(
+                turn(serde_json::json!({ "state": "Completed", "warning": warning })),
+                "https://example.test"
+            )
+            .expect("completed"),
             Some(format!("turn turn-1 completed with a warning: {warning}"))
         );
         assert_eq!(
-            turn_outcome(turn(serde_json::json!({ "state": "Completed" }))).expect("completed"),
+            turn_outcome(
+                turn(serde_json::json!({ "state": "Completed" })),
+                "https://example.test"
+            )
+            .expect("completed"),
             None
         );
-        let failed = turn_outcome(turn(serde_json::json!({
-            "state": "Failed", "reason": "BoxDiskFull", "detail": warning, "failedAt": "2026-11-18T10:00:00+00:00",
-        })))
+        let failed = turn_outcome(
+            turn(serde_json::json!({
+                "state": "Failed", "reason": "BoxDiskFull", "detail": warning, "failedAt": "2026-11-18T10:00:00+00:00",
+            })),
+            "https://example.test",
+        )
         .expect_err("a failed turn fails the read");
         assert_eq!(
             failed.to_string(),

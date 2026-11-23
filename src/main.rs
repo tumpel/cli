@@ -25,7 +25,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tumpel_api::types::{
     CliCredentials, CliProofCredentials, DeviceApproval, DeviceCodeRequest, DeviceTokenRequest,
-    DeviceTokenRequestGrantType, EnrolmentTokenMint, EventProblem, OAuthErrorCode, Problem,
+    DeviceTokenRequestGrantType, DeviceTokenTokenType, EnrolmentTokenMint, EventProblem, OAuthError, OAuthErrorCode,
+    Problem,
 };
 use tumpel_api::{Client, Error, ResponseValue};
 
@@ -282,11 +283,6 @@ enum HostCommand {
     },
     /// Revoke a host: its channel closes and it cannot connect again.
     Revoke {
-        /// The `hostId` that tumpel host list prints.
-        host_id: String,
-    },
-    /// Restore an unhealthy or rate-limited host to healthy, so it gets turn offers again.
-    RestoreHealth {
         /// The `hostId` that tumpel host list prints.
         host_id: String,
     },
@@ -1319,6 +1315,7 @@ impl ProblemText for EventProblem {
     fn is_unrecognised(&self) -> bool {
         match self {
             Self::EventCursorExpiredProblem(_) => false,
+            Self::Unrecognised(_) => true,
             Self::Problem(problem) => problem.is_unrecognised(),
         }
     }
@@ -1329,7 +1326,20 @@ impl ProblemText for EventProblem {
                 format!("{}: {}. {}", problem.title, problem.detail, problem.fix)
             }
             Self::Problem(problem) => problem.text(),
+            Self::Unrecognised(_) => {
+                "the server sent a problem this CLI does not recognise; update the CLI".to_string()
+            }
         }
+    }
+}
+
+impl ProblemText for OAuthError {
+    fn is_unrecognised(&self) -> bool {
+        matches!(self.error, OAuthErrorCode::Unrecognised(_))
+    }
+
+    fn text(&self) -> String {
+        self.error_description.to_string()
     }
 }
 
@@ -1402,12 +1412,15 @@ async fn login(endpoint: Option<String>, name: Option<String>) -> Result<()> {
             .try_into()
             .map_err(|error| anyhow::anyhow!("--name {device_name:?} is not a device name: {error}"))?,
     };
-    let started = match client.device_flow_start(&request).await {
-        Ok(started) => started.into_inner(),
-        Err(Error::ErrorResponse(refusal)) => {
+    let started = match response(client.device_flow_start(&request).await, || {
+        format!("{endpoint}/v1/device/code")
+    })?
+    .recognised()?
+    {
+        Ok(started) => started,
+        Err(refusal) => {
             bail!("{endpoint} refused the sign-in: {}", refusal.error_description)
         }
-        Err(error) => return Err(error).with_context(|| format!("starting the device login at {endpoint}")),
     };
     match &proof {
         Some(proof) => {
@@ -1430,10 +1443,16 @@ async fn login(endpoint: Option<String>, name: Option<String>) -> Result<()> {
         if Instant::now() >= deadline {
             bail!("the code expired before it was approved; run tumpel login again");
         }
-        match client.device_flow_token(&poll).await {
+        match response(client.device_flow_token(&poll).await, || {
+            format!("{endpoint}/v1/device/token")
+        })?
+        .recognised()?
+        {
             Ok(granted) => {
+                if matches!(granted.token_type, DeviceTokenTokenType::Unrecognised(_)) {
+                    return Err(unrecognised_response(&endpoint).into());
+                }
                 let token = granted
-                    .into_inner()
                     .access_token
                     .to_string()
                     .try_into()
@@ -1445,7 +1464,7 @@ async fn login(endpoint: Option<String>, name: Option<String>) -> Result<()> {
                 eprintln!("signed in; wrote {}", path.display());
                 return Ok(());
             }
-            Err(Error::ErrorResponse(refusal)) => match refusal.error {
+            Err(refusal) => match refusal.error {
                 OAuthErrorCode::AuthorizationPending => {}
                 OAuthErrorCode::SlowDown => interval += Duration::from_secs(5),
                 OAuthErrorCode::AccessDenied => bail!("the sign-in was denied in the browser"),
@@ -1454,7 +1473,6 @@ async fn login(endpoint: Option<String>, name: Option<String>) -> Result<()> {
                 }
                 _ => bail!("the device login failed: {}", refusal.error_description),
             },
-            Err(error) => return Err(error).context("polling for the device token"),
         }
     }
 }
@@ -1503,40 +1521,74 @@ fn update_message(response: &UnrecognisedResponse) {
     }
 }
 
+enum ApiResponse<T, P> {
+    Answer(T),
+    Refusal(P),
+    Unrecognised(UnrecognisedResponse, Option<serde_json::Value>),
+}
+
+impl<T, P: ProblemText> ApiResponse<T, P> {
+    fn recognised(self) -> Result<Result<T, P>> {
+        match self {
+            Self::Answer(answer) => Ok(Ok(answer)),
+            Self::Refusal(problem) => Ok(Err(problem)),
+            Self::Unrecognised(response, _) => Err(response.into()),
+        }
+    }
+
+    fn required(self) -> Result<T> {
+        self.recognised()?
+            .map_err(|problem| anyhow::anyhow!("{}", problem.text()))
+    }
+}
+
+impl<T: Serialize, P: ProblemText> ApiResponse<T, P> {
+    fn shown(self) -> Result<serde_json::Value> {
+        match self {
+            Self::Unrecognised(response, Some(value)) => {
+                update_message(&response);
+                Ok(value)
+            }
+            response => Ok(serde_json::to_value(response.required()?)?),
+        }
+    }
+}
+
+fn response<T, P: ProblemText + Send + Sync + 'static>(
+    outcome: Result<ResponseValue<T>, Error<P>>,
+    call: impl FnOnce() -> String,
+) -> Result<ApiResponse<T, P>> {
+    match outcome {
+        Ok(answer) => Ok(ApiResponse::Answer(answer.into_inner())),
+        Err(Error::ErrorResponse(problem)) if !problem.is_unrecognised() => {
+            Ok(ApiResponse::Refusal(problem.into_inner()))
+        }
+        Err(Error::InvalidResponsePayload(body, _)) => {
+            let printable = match serde_json::from_slice(&body) {
+                Ok(value) if problem_fields(&value).is_none() => Some(value),
+                Ok(_) | Err(_) => None,
+            };
+            Ok(ApiResponse::Unrecognised(unrecognised_response(&call()), printable))
+        }
+        Err(Error::ErrorResponse(_) | Error::UnexpectedResponse(_)) => {
+            Ok(ApiResponse::Unrecognised(unrecognised_response(&call()), None))
+        }
+        Err(error) => Err(error).with_context(|| format!("calling {}", call())),
+    }
+}
+
 fn answered<T, P: ProblemText + Send + Sync + 'static>(
     outcome: Result<ResponseValue<T>, Error<P>>,
     call: impl FnOnce() -> String,
 ) -> Result<T> {
-    match outcome {
-        Ok(answer) => Ok(answer.into_inner()),
-        Err(Error::ErrorResponse(problem)) if problem.is_unrecognised() => Err(unrecognised_response(&call()).into()),
-        Err(Error::ErrorResponse(problem)) => bail!("{}", problem.text()),
-        Err(Error::UnexpectedResponse(_) | Error::InvalidResponsePayload(_, _)) => {
-            Err(unrecognised_response(&call()).into())
-        }
-        Err(error) => Err(error).with_context(|| format!("calling {}", call())),
-    }
+    response(outcome, call)?.required()
 }
 
 fn shown<T: Serialize, P: ProblemText + Send + Sync + 'static>(
     outcome: Result<ResponseValue<T>, Error<P>>,
     call: impl FnOnce() -> String,
 ) -> Result<serde_json::Value> {
-    match outcome {
-        Err(Error::InvalidResponsePayload(body, _)) => {
-            let response = unrecognised_response(&call());
-            let value: serde_json::Value = match serde_json::from_slice(&body) {
-                Ok(value) => value,
-                Err(_) => return Err(response.into()),
-            };
-            if problem_fields(&value).is_some() {
-                return Err(response.into());
-            }
-            update_message(&response);
-            Ok(value)
-        }
-        outcome => Ok(serde_json::to_value(answered(outcome, call)?)?),
-    }
+    response(outcome, call)?.shown()
 }
 
 fn problem_fields(value: &serde_json::Value) -> Option<String> {
@@ -1625,15 +1677,6 @@ async fn host(command: HostCommand) -> Result<()> {
                 format!("{endpoint}/v1/hosts/{host_id}/revoke")
             })?)
         }
-        HostCommand::RestoreHealth { host_id } => {
-            let id = host_id
-                .clone()
-                .try_into()
-                .map_err(|error| anyhow::anyhow!("{host_id:?} is not a host id: {error}"))?;
-            print_json(&shown(client.hosts_restore_health(&id).await, || {
-                format!("{endpoint}/v1/hosts/{host_id}/restore-health")
-            })?)
-        }
     }
 }
 
@@ -1706,21 +1749,24 @@ async fn tenant_config(command: ConfigCommand) -> Result<()> {
             Ok(())
         }
         ConfigCommand::Plan { file } => {
-            let (_, client) = signed_in()?;
-            tenant_config::print_plan(&tenant_config::plan(&client, &file, |name| std::env::var(name).ok()).await?);
+            let (credentials, client) = signed_in()?;
+            tenant_config::print_plan(
+                &tenant_config::plan(&client, &file, |name| std::env::var(name).ok()).await?,
+                &credentials.endpoint,
+            );
             Ok(())
         }
         ConfigCommand::Apply { file } => {
-            let (_, client) = signed_in()?;
+            let (credentials, client) = signed_in()?;
             let applied = tenant_config::apply(&client, &file, |name| std::env::var(name).ok()).await?;
-            tenant_config::print_plan(&applied);
+            tenant_config::print_plan(&applied, &credentials.endpoint);
             eprintln!("applied {} changes", applied.changes.len());
             Ok(())
         }
         ConfigCommand::Init { file } => {
-            let (_, client) = signed_in()?;
+            let (credentials, client) = signed_in()?;
             let live = tenant_config::live(&client).await?;
-            tenant_config::write_new(&file, &tenant_config::starter(&live)?)?;
+            tenant_config::write_new(&file, &tenant_config::starter(&live, &credentials.endpoint)?)?;
             eprintln!(
                 "wrote {}; export the environment variables its secret sets name, and put each persona file's bytes at the from path it names, before tumpel config apply",
                 file.display()
