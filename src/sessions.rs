@@ -588,9 +588,46 @@ fn turn_outcome(last: Turn, endpoint: &str) -> Result<Option<String>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{headed_lines, spend, turn_outcome, Spent};
+    use super::{headed_lines, session_output, spend, turn_outcome, Spent};
+    use crate::ApiResponse;
     use std::num::NonZeroU32;
     use tumpel_api::types::EntityId;
+    use tumpel_api::types::Session;
+
+    #[test]
+    fn session_output_preserves_future_variants_and_their_fields() {
+        let outcome = ApiResponse::Answer(vec![
+            Session::Unrecognised(serde_json::json!({"state": "FutureState", "extra": true})),
+            Session::Unrecognised(serde_json::json!({"state": "AnotherFutureState"})),
+        ]);
+        assert_eq!(
+            session_output(outcome, "https://example.test").unwrap(),
+            serde_json::json!([
+                {"state": "FutureState", "extra": true}, {"state": "AnotherFutureState"}
+            ])
+        );
+    }
+
+    #[test]
+    fn session_output_preserves_an_undecodable_printable_answer() {
+        let outcome: ApiResponse<Session, _> = ApiResponse::Unrecognised(
+            crate::unrecognised_response("https://example.test"),
+            Some(serde_json::json!({"state": {"future": true}})),
+        );
+        assert_eq!(
+            session_output(outcome, "https://example.test").unwrap(),
+            serde_json::json!({"state": {"future": true}})
+        );
+    }
+
+    #[test]
+    fn session_output_stops_bulk_archive_on_an_unrecognised_refusal() {
+        let outcome: ApiResponse<Session, _> =
+            ApiResponse::Unrecognised(crate::unrecognised_response("https://example.test"), None);
+        assert!(session_output(outcome, "https://example.test")
+            .unwrap_err()
+            .is::<crate::UnrecognisedResponse>());
+    }
 
     fn lines(count: u32) -> NonZeroU32 {
         NonZeroU32::new(count).expect("a test limit is not zero")

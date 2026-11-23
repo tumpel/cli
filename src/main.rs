@@ -1879,6 +1879,80 @@ mod tests {
         );
     }
 
+    #[test]
+    fn required_responses_stop_on_printable_but_undecodable_answers() {
+        let outcome: ApiResponse<(), Problem> = ApiResponse::Unrecognised(
+            unrecognised_response("https://example.test/v1/device/token"),
+            Some(serde_json::json!({"access_token": {"future": true}})),
+        );
+        let error = outcome.required().unwrap_err();
+        assert!(error.is::<UnrecognisedResponse>());
+        assert_eq!(error.to_string(), "the server sent a response this CLI doesn't recognise, please update the CLI: curl -fsSL https://example.test/v1/releases/install.sh | sh");
+    }
+
+    #[test]
+    fn unreadable_payloads_stop_with_the_update_instruction() {
+        let body = b"not JSON";
+        let outcome: Result<ResponseValue<()>, Error<Problem>> = Err(Error::InvalidResponsePayload(
+            body.to_vec().into(),
+            serde_json::from_slice::<()>(body).unwrap_err(),
+        ));
+        let error = response(outcome, || "https://example.test/v1/sessions".to_string())
+            .unwrap()
+            .shown()
+            .unwrap_err();
+        assert!(error.is::<UnrecognisedResponse>());
+    }
+
+    #[test]
+    fn unknown_refusals_stop_with_the_update_instruction() {
+        let outcome: Result<ResponseValue<()>, Error<Problem>> = Err(Error::ErrorResponse(ResponseValue::new(
+            Problem {
+                code: tumpel_api::types::ProblemCode::Unrecognised("FutureRefusal".to_string()),
+                title: "Future refusal".parse().unwrap(),
+                detail: "future detail".parse().unwrap(),
+                fix: "future fix".parse().unwrap(),
+            },
+            reqwest::StatusCode::BAD_REQUEST,
+            reqwest::header::HeaderMap::new(),
+        )));
+        let error = response(outcome, || "https://example.test/v1/sessions".to_string())
+            .unwrap()
+            .recognised()
+            .unwrap_err();
+        assert!(error.is::<UnrecognisedResponse>());
+    }
+
+    #[test]
+    fn known_refusals_keep_their_explanation() {
+        let outcome: ApiResponse<(), Problem> = ApiResponse::Refusal(Problem {
+            code: tumpel_api::types::ProblemCode::GitHubAppPermissionMissing,
+            title: "Permission missing".parse().unwrap(),
+            detail: "cannot read the repository".parse().unwrap(),
+            fix: "grant access".parse().unwrap(),
+        });
+        assert_eq!(
+            outcome.required().unwrap_err().to_string(),
+            "Permission missing: cannot read the repository. grant access"
+        );
+    }
+
+    #[test]
+    fn known_answers_keep_their_value() {
+        let outcome: Result<ResponseValue<bool>, Error<Problem>> = Ok(ResponseValue::new(
+            true,
+            reqwest::StatusCode::OK,
+            reqwest::header::HeaderMap::new(),
+        ));
+        assert_eq!(
+            response(outcome, || panic!("a known answer needs no update instruction"))
+                .unwrap()
+                .shown()
+                .unwrap(),
+            serde_json::json!(true)
+        );
+    }
+
     fn parses(args: &[&str]) -> bool {
         Cli::try_parse_from(["tumpel"].into_iter().chain(args.iter().copied())).is_ok()
     }
