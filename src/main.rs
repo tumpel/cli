@@ -1,6 +1,7 @@
 mod bundle;
 mod claude_setups;
 mod config;
+mod config_path;
 mod connections;
 mod connectors;
 mod events;
@@ -208,6 +209,27 @@ enum ConfigCommand {
     Init {
         /// Where to write it; the file must not exist yet.
         file: PathBuf,
+    },
+    /// Print the current value of one field of the tenant config as JSON, or the whole config at /; a secret value is never shown.
+    Get {
+        /// The field as / then the list, the entry's name and the field, such as `/personas/reviewer/boxMemoryMib`; a pin is named by its harness and a host by its hostId.
+        path: String,
+    },
+    /// Change one field of the tenant config; every other field stays as it is.
+    Set {
+        /// The field as / then the list, the entry's name and the field, such as `/personas/reviewer/boxMemoryMib` or `/secretSets/prod/secrets/GITHUB_TOKEN`.
+        path: String,
+        /// The new value as JSON, with text quoted, such as 4096, true or '"reviewer"'.
+        #[arg(required_unless_present = "stdin", conflicts_with = "stdin")]
+        value: Option<String>,
+        /// Read a secret set member's value from stdin; a secret value is never taken as an argument.
+        #[arg(long)]
+        stdin: bool,
+    },
+    /// Delete one entry or field of the tenant config: a persona, secret set, member, pin, trigger, persona file, connector or host label.
+    Delete {
+        /// The entry or field, such as `/secretSets/prod/secrets/GITHUB_TOKEN`.
+        path: String,
     },
 }
 
@@ -1731,6 +1753,9 @@ async fn tenant_config(command: ConfigCommand) -> Result<()> {
             eprintln!("applied {} changes", applied.changes.len());
             Ok(())
         }
+        ConfigCommand::Get { path } => config_path::get(&path).await,
+        ConfigCommand::Set { path, value, stdin } => config_path::set(&path, value, stdin).await,
+        ConfigCommand::Delete { path } => config_path::delete(&path).await,
         ConfigCommand::Init { file } => {
             let (_, client) = signed_in()?;
             let live = tenant_config::live(&client).await?;
