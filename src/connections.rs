@@ -1,7 +1,6 @@
-use crate::sessions::{id, parsed};
-use crate::{answered, print_json, shown, signed_in, ConnectionCommand, NamespaceCommand, OauthGrantCommand};
+use crate::sessions::id;
+use crate::{answered, print_json, shown, signed_in, ConnectionCommand, OauthGrantCommand};
 use anyhow::Result;
-use tumpel_api::types::NamespaceConnectionStart;
 
 pub async fn connection(command: ConnectionCommand) -> Result<()> {
     let (credentials, client) = signed_in()?;
@@ -26,31 +25,6 @@ pub async fn oauth_grant(command: OauthGrantCommand) -> Result<()> {
                 format!("{endpoint}/v1/oauth-grants/{grant_id}")
             })?;
             eprintln!("revoked {grant_id}");
-            Ok(())
-        }
-    }
-}
-
-pub async fn namespace(command: NamespaceCommand) -> Result<()> {
-    let (credentials, client) = signed_in()?;
-    let url = format!("{}/v1/namespace-connection", credentials.endpoint);
-    match command {
-        NamespaceCommand::Get => print_json(&shown(client.namespace_connections_get().await, || url)?),
-        NamespaceCommand::Start {
-            account_label,
-            workspace_id,
-        } => {
-            let body = NamespaceConnectionStart {
-                account_label: parsed("--account-label", &account_label)?,
-                workspace_id: parsed("--workspace-id", &workspace_id)?,
-            };
-            print_json(&shown(client.namespace_connections_start(&body).await, || {
-                format!("{url}/start")
-            })?)
-        }
-        NamespaceCommand::Delete => {
-            answered(client.namespace_connections_delete().await, || url)?;
-            eprintln!("disconnected the Namespace build provider");
             Ok(())
         }
     }

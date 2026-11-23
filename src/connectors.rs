@@ -22,6 +22,7 @@ async fn read_updated_at(client: &Client, endpoint: &str, connector_id: &str, id
     Ok(match connector {
         Connector::StaticConnector(connector) => connector.updated_at,
         Connector::OAuthConnector(connector) => connector.updated_at,
+        Connector::Unrecognised(_) => return Err(crate::unrecognised_response(endpoint).into()),
     })
 }
 

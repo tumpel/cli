@@ -21,10 +21,12 @@ use serde::Serialize;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tumpel_api::types::{
     CliCredentials, CliProofCredentials, DeviceApproval, DeviceCodeRequest, DeviceTokenRequest,
-    DeviceTokenRequestGrantType, EnrolmentTokenMint, EventProblem, OAuthErrorCode, Problem,
+    DeviceTokenRequestGrantType, DeviceTokenTokenType, EnrolmentTokenMint, EventProblem, OAuthError, OAuthErrorCode,
+    Problem,
 };
 use tumpel_api::{Client, Error, ResponseValue};
 
@@ -160,11 +162,6 @@ enum Command {
         #[command(subcommand)]
         command: ConnectionCommand,
     },
-    /// Connect your Namespace workspace as a build provider, or read or remove it.
-    Namespace {
-        #[command(subcommand)]
-        command: NamespaceCommand,
-    },
     /// Start or read the prebuilds that install a repository's dependencies ahead of its sessions.
     Prebuild {
         #[command(subcommand)]
@@ -286,11 +283,6 @@ enum HostCommand {
     },
     /// Revoke a host: its channel closes and it cannot connect again.
     Revoke {
-        /// The `hostId` that tumpel host list prints.
-        host_id: String,
-    },
-    /// Restore an unhealthy or rate-limited host to healthy, so it gets turn offers again.
-    RestoreHealth {
         /// The `hostId` that tumpel host list prints.
         host_id: String,
     },
@@ -1153,23 +1145,6 @@ enum OpenrouterCommand {
 }
 
 #[derive(Subcommand)]
-enum NamespaceCommand {
-    /// Show the issuer, subject pattern and audience Namespace trusts.
-    Get,
-    /// Connect your Namespace workspace, replacing an earlier connection.
-    Start {
-        /// The Namespace workspace that bills the builds, as you name it.
-        #[arg(long)]
-        account_label: String,
-        /// The workspace id, such as `tenant_123456789ab`, that the builds run in.
-        #[arg(long)]
-        workspace_id: String,
-    },
-    /// Disconnect the Namespace build provider.
-    Delete,
-}
-
-#[derive(Subcommand)]
 enum ClaudeSetupCommand {
     /// Start a box that runs claude setup-token; read it with get until it shows the sign-in URL.
     Start {
@@ -1323,22 +1298,48 @@ fn host_name() -> String {
 
 trait ProblemText: std::fmt::Debug {
     fn text(&self) -> String;
+    fn is_unrecognised(&self) -> bool;
 }
 
 impl ProblemText for Problem {
+    fn is_unrecognised(&self) -> bool {
+        matches!(self.code, tumpel_api::types::ProblemCode::Unrecognised(_))
+    }
+
     fn text(&self) -> String {
         format!("{}: {}. {}", self.title, self.detail, self.fix)
     }
 }
 
 impl ProblemText for EventProblem {
+    fn is_unrecognised(&self) -> bool {
+        match self {
+            Self::EventCursorExpiredProblem(_) => false,
+            Self::Unrecognised(_) => true,
+            Self::Problem(problem) => problem.is_unrecognised(),
+        }
+    }
+
     fn text(&self) -> String {
         match self {
             Self::EventCursorExpiredProblem(problem) => {
                 format!("{}: {}. {}", problem.title, problem.detail, problem.fix)
             }
             Self::Problem(problem) => problem.text(),
+            Self::Unrecognised(_) => {
+                "the server sent a problem this CLI does not recognise; update the CLI".to_string()
+            }
         }
+    }
+}
+
+impl ProblemText for OAuthError {
+    fn is_unrecognised(&self) -> bool {
+        matches!(self.error, OAuthErrorCode::Unrecognised(_))
+    }
+
+    fn text(&self) -> String {
+        self.error_description.to_string()
     }
 }
 
@@ -1411,12 +1412,15 @@ async fn login(endpoint: Option<String>, name: Option<String>) -> Result<()> {
             .try_into()
             .map_err(|error| anyhow::anyhow!("--name {device_name:?} is not a device name: {error}"))?,
     };
-    let started = match client.device_flow_start(&request).await {
-        Ok(started) => started.into_inner(),
-        Err(Error::ErrorResponse(refusal)) => {
+    let started = match response(client.device_flow_start(&request).await, || {
+        format!("{endpoint}/v1/device/code")
+    })?
+    .recognised()?
+    {
+        Ok(started) => started,
+        Err(refusal) => {
             bail!("{endpoint} refused the sign-in: {}", refusal.error_description)
         }
-        Err(error) => return Err(error).with_context(|| format!("starting the device login at {endpoint}")),
     };
     match &proof {
         Some(proof) => {
@@ -1439,10 +1443,16 @@ async fn login(endpoint: Option<String>, name: Option<String>) -> Result<()> {
         if Instant::now() >= deadline {
             bail!("the code expired before it was approved; run tumpel login again");
         }
-        match client.device_flow_token(&poll).await {
+        match response(client.device_flow_token(&poll).await, || {
+            format!("{endpoint}/v1/device/token")
+        })?
+        .recognised()?
+        {
             Ok(granted) => {
+                if matches!(granted.token_type, DeviceTokenTokenType::Unrecognised(_)) {
+                    return Err(unrecognised_response(&endpoint).into());
+                }
                 let token = granted
-                    .into_inner()
                     .access_token
                     .to_string()
                     .try_into()
@@ -1454,7 +1464,7 @@ async fn login(endpoint: Option<String>, name: Option<String>) -> Result<()> {
                 eprintln!("signed in; wrote {}", path.display());
                 return Ok(());
             }
-            Err(Error::ErrorResponse(refusal)) => match refusal.error {
+            Err(refusal) => match refusal.error {
                 OAuthErrorCode::AuthorizationPending => {}
                 OAuthErrorCode::SlowDown => interval += Duration::from_secs(5),
                 OAuthErrorCode::AccessDenied => bail!("the sign-in was denied in the browser"),
@@ -1463,7 +1473,6 @@ async fn login(endpoint: Option<String>, name: Option<String>) -> Result<()> {
                 }
                 _ => bail!("the device login failed: {}", refusal.error_description),
             },
-            Err(error) => return Err(error).context("polling for the device token"),
         }
     }
 }
@@ -1483,40 +1492,88 @@ fn signed_in() -> Result<(CliCredentials, Client)> {
     Ok((credentials, client))
 }
 
-#[derive(Debug)]
-struct UnexpectedAnswer(reqwest::Response);
+const UNRECOGNISED_RESPONSE_EXIT: u8 = 3;
+static UPDATE_MESSAGE_PRINTED: AtomicBool = AtomicBool::new(false);
 
-impl std::fmt::Display for UnexpectedAnswer {
+#[derive(Debug)]
+struct UnrecognisedResponse(String);
+
+impl std::fmt::Display for UnrecognisedResponse {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            formatter,
-            "The Tumpel service at {} answered status {}",
-            self.0.url().host_str().unwrap_or("your endpoint"),
-            self.0.status().as_u16()
-        )
+        write!(formatter, "the server sent a response this CLI doesn't recognise, please update the CLI: curl -fsSL {}/v1/releases/install.sh | sh", self.0)
     }
 }
 
-impl std::error::Error for UnexpectedAnswer {}
+impl std::error::Error for UnrecognisedResponse {}
 
-async fn explained(error: anyhow::Error) -> anyhow::Error {
-    let UnexpectedAnswer(response) = match error.downcast::<UnexpectedAnswer>() {
-        Ok(answer) => answer,
-        Err(error) => return error,
-    };
-    let host = response.url().host_str().unwrap_or("your endpoint").to_string();
-    let status = response.status().as_u16();
-    if !response.status().is_client_error() {
-        return anyhow::anyhow!(
-            "The Tumpel service at {host} failed with status {status}; try again in a few minutes."
-        );
+fn unrecognised_response(call: &str) -> UnrecognisedResponse {
+    UnrecognisedResponse(
+        call.split_once("/v1/")
+            .map_or(call, |(endpoint, _)| endpoint)
+            .trim_end_matches('/')
+            .to_string(),
+    )
+}
+
+fn update_message(response: &UnrecognisedResponse) {
+    if !UPDATE_MESSAGE_PRINTED.swap(true, Ordering::Relaxed) {
+        eprintln!("{response}");
     }
-    let body = response.text().await.unwrap_or_default();
-    match serde_json::from_str::<Problem>(&body) {
-        Ok(problem) => anyhow::anyhow!("{}. {}", problem.title, problem.fix),
-        Err(_) => anyhow::anyhow!(
-            "The Tumpel service at {host} refused the request with status {status} and no problem document. Check the command's arguments; if they are right, report it at https://github.com/tumpel/cli/issues/new."
-        ),
+}
+
+enum ApiResponse<T, P> {
+    Answer(T),
+    Refusal(P),
+    Unrecognised(UnrecognisedResponse, Option<serde_json::Value>),
+}
+
+impl<T, P: ProblemText> ApiResponse<T, P> {
+    fn recognised(self) -> Result<Result<T, P>> {
+        match self {
+            Self::Answer(answer) => Ok(Ok(answer)),
+            Self::Refusal(problem) => Ok(Err(problem)),
+            Self::Unrecognised(response, _) => Err(response.into()),
+        }
+    }
+
+    fn required(self) -> Result<T> {
+        self.recognised()?
+            .map_err(|problem| anyhow::anyhow!("{}", problem.text()))
+    }
+}
+
+impl<T: Serialize, P: ProblemText> ApiResponse<T, P> {
+    fn shown(self) -> Result<serde_json::Value> {
+        match self {
+            Self::Unrecognised(response, Some(value)) => {
+                update_message(&response);
+                Ok(value)
+            }
+            response => Ok(serde_json::to_value(response.required()?)?),
+        }
+    }
+}
+
+fn response<T, P: ProblemText + Send + Sync + 'static>(
+    outcome: Result<ResponseValue<T>, Error<P>>,
+    call: impl FnOnce() -> String,
+) -> Result<ApiResponse<T, P>> {
+    match outcome {
+        Ok(answer) => Ok(ApiResponse::Answer(answer.into_inner())),
+        Err(Error::ErrorResponse(problem)) if !problem.is_unrecognised() => {
+            Ok(ApiResponse::Refusal(problem.into_inner()))
+        }
+        Err(Error::InvalidResponsePayload(body, _)) => {
+            let printable = match serde_json::from_slice(&body) {
+                Ok(value) if problem_fields(&value).is_none() => Some(value),
+                Ok(_) | Err(_) => None,
+            };
+            Ok(ApiResponse::Unrecognised(unrecognised_response(&call()), printable))
+        }
+        Err(Error::ErrorResponse(_) | Error::UnexpectedResponse(_)) => {
+            Ok(ApiResponse::Unrecognised(unrecognised_response(&call()), None))
+        }
+        Err(error) => Err(error).with_context(|| format!("calling {}", call())),
     }
 }
 
@@ -1524,33 +1581,14 @@ fn answered<T, P: ProblemText + Send + Sync + 'static>(
     outcome: Result<ResponseValue<T>, Error<P>>,
     call: impl FnOnce() -> String,
 ) -> Result<T> {
-    match outcome {
-        Ok(answer) => Ok(answer.into_inner()),
-        Err(Error::ErrorResponse(problem)) => bail!("{}", problem.text()),
-        Err(Error::UnexpectedResponse(response)) => Err(UnexpectedAnswer(response).into()),
-        Err(Error::InvalidResponsePayload(_, error)) => bail!(
-            "calling {} returned an answer this tumpel cannot read ({error}). The control plane runs an older API than this CLI; install the CLI it serves with: curl -fsSL <endpoint>/v1/releases/install.sh | sh",
-            call()
-        ),
-        Err(error) => Err(error).with_context(|| format!("calling {}", call())),
-    }
+    response(outcome, call)?.required()
 }
 
 fn shown<T: Serialize, P: ProblemText + Send + Sync + 'static>(
     outcome: Result<ResponseValue<T>, Error<P>>,
     call: impl FnOnce() -> String,
 ) -> Result<serde_json::Value> {
-    match outcome {
-        Err(Error::InvalidResponsePayload(body, _)) => {
-            let value: serde_json::Value = serde_json::from_slice(&body)
-                .with_context(|| format!("calling {} returned a body that is not JSON", call()))?;
-            if let Some(problem) = problem_fields(&value) {
-                bail!("{problem}");
-            }
-            Ok(value)
-        }
-        outcome => Ok(serde_json::to_value(answered(outcome, call)?)?),
-    }
+    response(outcome, call)?.shown()
 }
 
 fn problem_fields(value: &serde_json::Value) -> Option<String> {
@@ -1639,15 +1677,6 @@ async fn host(command: HostCommand) -> Result<()> {
                 format!("{endpoint}/v1/hosts/{host_id}/revoke")
             })?)
         }
-        HostCommand::RestoreHealth { host_id } => {
-            let id = host_id
-                .clone()
-                .try_into()
-                .map_err(|error| anyhow::anyhow!("{host_id:?} is not a host id: {error}"))?;
-            print_json(&shown(client.hosts_restore_health(&id).await, || {
-                format!("{endpoint}/v1/hosts/{host_id}/restore-health")
-            })?)
-        }
     }
 }
 
@@ -1720,21 +1749,24 @@ async fn tenant_config(command: ConfigCommand) -> Result<()> {
             Ok(())
         }
         ConfigCommand::Plan { file } => {
-            let (_, client) = signed_in()?;
-            tenant_config::print_plan(&tenant_config::plan(&client, &file, |name| std::env::var(name).ok()).await?);
+            let (credentials, client) = signed_in()?;
+            tenant_config::print_plan(
+                &tenant_config::plan(&client, &file, |name| std::env::var(name).ok()).await?,
+                &credentials.endpoint,
+            );
             Ok(())
         }
         ConfigCommand::Apply { file } => {
-            let (_, client) = signed_in()?;
+            let (credentials, client) = signed_in()?;
             let applied = tenant_config::apply(&client, &file, |name| std::env::var(name).ok()).await?;
-            tenant_config::print_plan(&applied);
+            tenant_config::print_plan(&applied, &credentials.endpoint);
             eprintln!("applied {} changes", applied.changes.len());
             Ok(())
         }
         ConfigCommand::Init { file } => {
-            let (_, client) = signed_in()?;
+            let (credentials, client) = signed_in()?;
             let live = tenant_config::live(&client).await?;
-            tenant_config::write_new(&file, &tenant_config::starter(&live)?)?;
+            tenant_config::write_new(&file, &tenant_config::starter(&live, &credentials.endpoint)?)?;
             eprintln!(
                 "wrote {}; export the environment variables its secret sets name, and put each persona file's bytes at the from path it names, before tumpel config apply",
                 file.display()
@@ -1754,7 +1786,7 @@ fn main() -> ExitCode {
         }
     };
     let outcome = runtime.block_on(async {
-        let outcome = match cli.command {
+        match cli.command {
             Command::Login { endpoint, name } => login(endpoint, name).await,
             Command::Whoami => whoami().await,
             Command::Tenants => members::tenants().await,
@@ -1784,16 +1816,15 @@ fn main() -> ExitCode {
             Command::Openrouter { command } => openrouter::openrouter(command).await,
             Command::OauthGrant { command } => connections::oauth_grant(command).await,
             Command::Connection { command } => connections::connection(command).await,
-            Command::Namespace { command } => connections::namespace(command).await,
-        };
-        match outcome {
-            Err(error) => Err(explained(error).await),
-            done => done,
         }
     });
     match outcome {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
+            if let Some(response) = error.downcast_ref::<UnrecognisedResponse>() {
+                update_message(response);
+                return ExitCode::from(UNRECOGNISED_RESPONSE_EXIT);
+            }
             eprintln!("tumpel: {error:#}");
             ExitCode::FAILURE
         }
@@ -1823,6 +1854,19 @@ mod tests {
     }
 
     #[test]
+    fn prints_scalar_answers_this_cli_cannot_decode() {
+        for body in ["null", r#""future response""#, "42", "true", "false"] {
+            let error = serde_json::from_str::<Whoami>(body).unwrap_err();
+            let outcome: Result<ResponseValue<Whoami>, Error<Problem>> =
+                Err(Error::InvalidResponsePayload(body.as_bytes().to_vec().into(), error));
+            assert_eq!(
+                shown(outcome, String::new).unwrap(),
+                serde_json::from_str::<serde_json::Value>(body).unwrap()
+            );
+        }
+    }
+
+    #[test]
     fn fails_on_a_problem_this_cli_cannot_decode() {
         let body =
             r#"{"code":"HostRetired","title":"Host retired","detail":"The host left the pool","fix":"Enrol it again"}"#;
@@ -1830,8 +1874,82 @@ mod tests {
         let outcome: Result<ResponseValue<Whoami>, Error<Problem>> =
             Err(Error::InvalidResponsePayload(body.as_bytes().to_vec().into(), error));
         assert_eq!(
-            shown(outcome, String::new).unwrap_err().to_string(),
-            "Host retired: The host left the pool. Enrol it again"
+            shown(outcome, || "https://example.test/v1/whoami".to_string()).unwrap_err().to_string(),
+            "the server sent a response this CLI doesn't recognise, please update the CLI: curl -fsSL https://example.test/v1/releases/install.sh | sh"
+        );
+    }
+
+    #[test]
+    fn required_responses_stop_on_printable_but_undecodable_answers() {
+        let outcome: ApiResponse<(), Problem> = ApiResponse::Unrecognised(
+            unrecognised_response("https://example.test/v1/device/token"),
+            Some(serde_json::json!({"access_token": {"future": true}})),
+        );
+        let error = outcome.required().unwrap_err();
+        assert!(error.is::<UnrecognisedResponse>());
+        assert_eq!(error.to_string(), "the server sent a response this CLI doesn't recognise, please update the CLI: curl -fsSL https://example.test/v1/releases/install.sh | sh");
+    }
+
+    #[test]
+    fn unreadable_payloads_stop_with_the_update_instruction() {
+        let body = b"not JSON";
+        let outcome: Result<ResponseValue<()>, Error<Problem>> = Err(Error::InvalidResponsePayload(
+            body.to_vec().into(),
+            serde_json::from_slice::<()>(body).unwrap_err(),
+        ));
+        let error = response(outcome, || "https://example.test/v1/sessions".to_string())
+            .unwrap()
+            .shown()
+            .unwrap_err();
+        assert!(error.is::<UnrecognisedResponse>());
+    }
+
+    #[test]
+    fn unknown_refusals_stop_with_the_update_instruction() {
+        let outcome: Result<ResponseValue<()>, Error<Problem>> = Err(Error::ErrorResponse(ResponseValue::new(
+            Problem {
+                code: tumpel_api::types::ProblemCode::Unrecognised("FutureRefusal".to_string()),
+                title: "Future refusal".parse().unwrap(),
+                detail: "future detail".parse().unwrap(),
+                fix: "future fix".parse().unwrap(),
+            },
+            reqwest::StatusCode::BAD_REQUEST,
+            reqwest::header::HeaderMap::new(),
+        )));
+        let error = response(outcome, || "https://example.test/v1/sessions".to_string())
+            .unwrap()
+            .recognised()
+            .unwrap_err();
+        assert!(error.is::<UnrecognisedResponse>());
+    }
+
+    #[test]
+    fn known_refusals_keep_their_explanation() {
+        let outcome: ApiResponse<(), Problem> = ApiResponse::Refusal(Problem {
+            code: tumpel_api::types::ProblemCode::GitHubAppPermissionMissing,
+            title: "Permission missing".parse().unwrap(),
+            detail: "cannot read the repository".parse().unwrap(),
+            fix: "grant access".parse().unwrap(),
+        });
+        assert_eq!(
+            outcome.required().unwrap_err().to_string(),
+            "Permission missing: cannot read the repository. grant access"
+        );
+    }
+
+    #[test]
+    fn known_answers_keep_their_value() {
+        let outcome: Result<ResponseValue<bool>, Error<Problem>> = Ok(ResponseValue::new(
+            true,
+            reqwest::StatusCode::OK,
+            reqwest::header::HeaderMap::new(),
+        ));
+        assert_eq!(
+            response(outcome, || panic!("a known answer needs no update instruction"))
+                .unwrap()
+                .shown()
+                .unwrap(),
+            serde_json::json!(true)
         );
     }
 

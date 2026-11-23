@@ -11,7 +11,7 @@ use tumpel_api::types::{
     PersonaFileUploadRequest, PersonaFileWrite, Sha256Digest, StoredConfigFile, StoredConfigFileSource,
     StoredPersonaFile, StoredPersonaFileSource, TenantConfig,
 };
-use tumpel_api::Client;
+use tumpel_api::{Client, ClientInfo};
 
 pub struct LocalFile {
     pub from: LocalFilePath,
@@ -87,13 +87,9 @@ pub async fn upload(client: &Client, bytes: &[u8], rerun: &str) -> Result<(Sha25
             .map_err(|error| anyhow!("the digest {digest} is not usable: {error}"))?,
         size_bytes: PersonaFileSize(i64::try_from(bytes.len()).unwrap_or(i64::MAX)),
     };
-    let presigned = match client.personas_upload_file(&request).await {
-        Ok(answer) => answer.into_inner(),
-        Err(tumpel_api::Error::ErrorResponse(problem)) => {
-            bail!("{}: {}. {}", problem.title, problem.detail, problem.fix)
-        }
-        Err(error) => return Err(error).context("asking for a presigned persona file upload"),
-    };
+    let presigned = crate::answered(client.personas_upload_file(&request).await, || {
+        client.baseurl().to_string()
+    })?;
     let response = reqwest::Client::new()
         .put(presigned.upload_url.as_str())
         .body(bytes.to_vec())

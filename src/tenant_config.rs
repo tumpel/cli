@@ -5,37 +5,40 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Write;
 use std::path::Path;
 use tumpel_api::types::{
-    ApiKeyUpdate, ApiKeyUpdateKind, ApiKeyValue, ApiKeyValueKind, ConfigApiKey, ConfigApiKeyKind, ConfigExpiry,
-    ConfigExpiryValue, ConfigHost, ConfigPersona, ConfigPersonaFile, ConfigPlan, ConfigSecret, ConfigSecretSet,
-    ConfigSecretValue, ConfigSecretVariable, ConfigSecretVariableKind, ConfigSubscriptionToken,
-    ConfigSubscriptionTokenKind, ConfigTrigger, Connector, DisplayName, EffectiveHarnessVersion,
-    EnvironmentVariableName, HarnessPinCreate, Host, HostState, Persona, PersonaFile, PersonaFilePath, Problem,
-    SecretKey, SecretMemberUpdate, SecretName, SecretSet, SecretValue, SecretValueSource, SecretVariableUpdate,
-    SecretVariableUpdateKind, SecretVariableValue, SecretVariableValueKind, Sha256Digest, SubscriptionTokenUpdate,
-    SubscriptionTokenUpdateKind, SubscriptionTokenValue, SubscriptionTokenValueKind, TenantConfig, TenantConfigApply,
-    TenantConfigPlanRequest, Trigger,
+    ApiKeyUpdate, ApiKeyUpdateKind, ApiKeyValue, ApiKeyValueKind, ConfigApiKey, ConfigApiKeyKind, ConfigChangeAction,
+    ConfigExpiry, ConfigExpiryValue, ConfigHost, ConfigPersona, ConfigPersonaFile, ConfigPlan, ConfigResource,
+    ConfigSecret, ConfigSecretSet, ConfigSecretValue, ConfigSecretVariable, ConfigSecretVariableKind,
+    ConfigSubscriptionToken, ConfigSubscriptionTokenKind, ConfigTrigger, Connector, DisplayName,
+    EffectiveHarnessVersion, EnvironmentVariableName, HarnessPinCreate, Host, HostState, Persona, PersonaFile,
+    PersonaFilePath, SecretKey, SecretMemberUpdate, SecretName, SecretSet, SecretValue, SecretValueSource,
+    SecretVariableUpdate, SecretVariableUpdateKind, SecretVariableValue, SecretVariableValueKind, Sha256Digest,
+    SubscriptionTokenUpdate, SubscriptionTokenUpdateKind, SubscriptionTokenValue, SubscriptionTokenValueKind,
+    TenantConfig, TenantConfigApply, TenantConfigPlanRequest, Trigger,
 };
-use tumpel_api::{Client, Error, TENANT_CONFIG_SCHEMA};
+use tumpel_api::{Client, ClientInfo, TENANT_CONFIG_SCHEMA};
 
-fn held_digest(file: &PersonaFile) -> &Sha256Digest {
-    match file {
+fn held_digest<'a>(file: &'a PersonaFile, endpoint: &str) -> Result<&'a Sha256Digest> {
+    Ok(match file {
         PersonaFile::InlinePersonaFileRead(file) => &file.digest,
         PersonaFile::StoredPersonaFileRead(file) => &file.digest,
-    }
+        PersonaFile::Unrecognised(_) => return Err(crate::unrecognised_response(endpoint).into()),
+    })
 }
 
-fn connector_identity(connector: &Connector) -> (&str, &DisplayName) {
-    match connector {
+fn connector_identity<'a>(connector: &'a Connector, endpoint: &str) -> Result<(&'a str, &'a DisplayName)> {
+    Ok(match connector {
         Connector::StaticConnector(connector) => (connector.connector_id.as_str(), &connector.name),
         Connector::OAuthConnector(connector) => (connector.connector_id.as_str(), &connector.name),
-    }
+        Connector::Unrecognised(_) => return Err(crate::unrecognised_response(endpoint).into()),
+    })
 }
 
-fn held_path(file: &PersonaFile) -> &PersonaFilePath {
-    match file {
+fn held_path<'a>(file: &'a PersonaFile, endpoint: &str) -> Result<&'a PersonaFilePath> {
+    Ok(match file {
         PersonaFile::InlinePersonaFileRead(file) => &file.path,
         PersonaFile::StoredPersonaFileRead(file) => &file.path,
-    }
+        PersonaFile::Unrecognised(_) => return Err(crate::unrecognised_response(endpoint).into()),
+    })
 }
 
 fn schema() -> Result<Value> {
@@ -94,21 +97,6 @@ pub fn parse(file: &Path) -> Result<TenantConfig> {
     Ok(config)
 }
 
-fn refused(problem: &Problem) -> anyhow::Error {
-    anyhow!("{}: {}. {}", problem.title, problem.detail, problem.fix)
-}
-
-async fn answer<T>(
-    call: impl std::future::Future<Output = Result<tumpel_api::ResponseValue<T>, Error<Problem>>>,
-    what: &str,
-) -> Result<T> {
-    match call.await {
-        Ok(value) => Ok(value.into_inner()),
-        Err(Error::ErrorResponse(problem)) => Err(refused(&problem)).with_context(|| what.to_string()),
-        Err(error) => Err(error).with_context(|| what.to_string()),
-    }
-}
-
 pub struct Live {
     pub personas: Vec<Persona>,
     pub secret_sets: Vec<SecretSet>,
@@ -120,12 +108,14 @@ pub struct Live {
 
 pub async fn live(client: &Client) -> Result<Live> {
     Ok(Live {
-        personas: answer(client.personas_list(), "listing personas").await?,
-        secret_sets: answer(client.secret_sets_list(), "listing secret sets").await?,
-        pins: answer(client.harness_catalog_list_pins(), "listing harness pins").await?,
-        hosts: answer(client.hosts_list(), "listing hosts").await?,
-        connectors: answer(client.connectors_list(), "listing connectors").await?,
-        triggers: answer(client.triggers_list(), "listing triggers").await?,
+        personas: crate::answered(client.personas_list().await, || client.baseurl().to_string())?,
+        secret_sets: crate::answered(client.secret_sets_list().await, || client.baseurl().to_string())?,
+        pins: crate::answered(client.harness_catalog_list_pins().await, || {
+            client.baseurl().to_string()
+        })?,
+        hosts: crate::answered(client.hosts_list().await, || client.baseurl().to_string())?,
+        connectors: crate::answered(client.connectors_list().await, || client.baseurl().to_string())?,
+        triggers: crate::answered(client.triggers_list().await, || client.baseurl().to_string())?,
     })
 }
 
@@ -166,28 +156,31 @@ pub fn expiry_values(config: &TenantConfig, lookup: impl Fn(&str) -> Option<Stri
     Ok(values.into_values().collect())
 }
 
-pub fn source(secret: &ConfigSecret) -> (&SecretName, &SecretValueSource) {
-    match secret {
+pub fn source(secret: &ConfigSecret) -> Result<(&SecretName, &SecretValueSource)> {
+    Ok(match secret {
         ConfigSecret::SecretVariable(variable) => (&variable.name, &variable.value_from),
         ConfigSecret::ApiKey(key) => (&key.name, &key.value_from),
         ConfigSecret::SubscriptionToken(token) => (&token.name, &token.value_from),
-    }
+        ConfigSecret::Unrecognised(_) => {
+            bail!("the config contains an unrecognised secret; update the CLI and run tumpel config validate")
+        }
+    })
 }
 
 pub fn secret_values<'a>(
     secret_sets: impl IntoIterator<Item = &'a ConfigSecretSet>,
     lookup: impl Fn(&str) -> Option<String>,
-) -> BTreeMap<String, String> {
+) -> Result<BTreeMap<String, String>> {
     let mut values = BTreeMap::new();
     for secret_set in secret_sets {
         for secret in &secret_set.secrets {
-            let name = source(secret).1.env.as_str();
+            let name = source(secret)?.1.env.as_str();
             if let Some(value) = lookup(name).filter(|value| !value.is_empty()) {
                 values.insert(name.to_string(), value);
             }
         }
     }
-    values
+    Ok(values)
 }
 
 fn env_names<'a>(names: impl IntoIterator<Item = &'a String>) -> Result<Vec<EnvironmentVariableName>> {
@@ -206,7 +199,7 @@ pub fn with_values(secret_set: &ConfigSecretSet, values: &BTreeMap<String, Strin
         .secrets
         .iter()
         .map(|secret| {
-            let (member, from) = source(secret);
+            let (member, from) = source(secret)?;
             let value = values
                 .get(from.env.as_str())
                 .cloned()
@@ -226,6 +219,9 @@ pub fn with_values(secret_set: &ConfigSecretSet, values: &BTreeMap<String, Strin
                     )
                 })?;
             Ok(match secret {
+                ConfigSecret::Unrecognised(_) => {
+                    bail!("the config contains an unrecognised secret; update the CLI and run tumpel config validate")
+                }
                 ConfigSecret::SecretVariable(variable) => SecretVariableValue {
                     kind: SecretVariableValueKind::Variable,
                     name: variable.name.clone(),
@@ -235,12 +231,15 @@ pub fn with_values(secret_set: &ConfigSecretSet, values: &BTreeMap<String, Strin
                 ConfigSecret::ApiKey(key) => ApiKeyValue {
                     kind: ApiKeyValueKind::ApiKey,
                     name: key.name.clone(),
-                    provider: key.provider,
+                    provider: key.provider.clone(),
                     value,
                 }
                 .into(),
                 ConfigSecret::SubscriptionToken(token) => SubscriptionTokenValue {
                     expires_at: match &token.expires_at {
+                        ConfigExpiry::Unrecognised(_) => bail!(
+                            "the config contains an unrecognised expiry; update the CLI and run tumpel config validate"
+                        ),
                         ConfigExpiry::DateTime(expires_at) => *expires_at,
                         ConfigExpiry::SecretValueSource(from) => bail!(
                             "the expiresAt of member {} names ${}; give it as an ISO 8601 date-time with an offset",
@@ -250,7 +249,7 @@ pub fn with_values(secret_set: &ConfigSecretSet, values: &BTreeMap<String, Strin
                     },
                     kind: SubscriptionTokenValueKind::SubscriptionToken,
                     name: token.name.clone(),
-                    provider: token.provider,
+                    provider: token.provider.clone(),
                     value,
                 }
                 .into(),
@@ -267,7 +266,7 @@ pub fn with_kept_values(
         .secrets
         .iter()
         .map(|secret| {
-            let (member, from) = source(secret);
+            let (member, from) = source(secret)?;
             let value = values
                 .get(from.env.as_str())
                 .map(|value| {
@@ -281,6 +280,9 @@ pub fn with_kept_values(
                 })
                 .transpose()?;
             Ok(match secret {
+                ConfigSecret::Unrecognised(_) => {
+                    bail!("the config contains an unrecognised secret; update the CLI and run tumpel config validate")
+                }
                 ConfigSecret::SecretVariable(variable) => SecretVariableUpdate {
                     kind: SecretVariableUpdateKind::Variable,
                     name: variable.name.clone(),
@@ -292,12 +294,15 @@ pub fn with_kept_values(
                     kind: ApiKeyUpdateKind::ApiKey,
                     name: key.name.clone(),
                     previous_name: None,
-                    provider: key.provider,
+                    provider: key.provider.clone(),
                     value,
                 }
                 .into(),
                 ConfigSecret::SubscriptionToken(token) => SubscriptionTokenUpdate {
                     expires_at: match &token.expires_at {
+                        ConfigExpiry::Unrecognised(_) => bail!(
+                            "the config contains an unrecognised expiry; update the CLI and run tumpel config validate"
+                        ),
                         ConfigExpiry::DateTime(expires_at) => *expires_at,
                         ConfigExpiry::SecretValueSource(from) => bail!(
                             "the expiresAt of member {} names ${}; give it as an ISO 8601 date-time with an offset",
@@ -308,7 +313,7 @@ pub fn with_kept_values(
                     kind: SubscriptionTokenUpdateKind::SubscriptionToken,
                     name: token.name.clone(),
                     previous_name: None,
-                    provider: token.provider,
+                    provider: token.provider.clone(),
                     value,
                 }
                 .into(),
@@ -317,12 +322,17 @@ pub fn with_kept_values(
         .collect()
 }
 
-pub fn print_plan(plan: &ConfigPlan) {
+pub fn print_plan(plan: &ConfigPlan, endpoint: &str) {
     if plan.changes.is_empty() {
         println!("no changes; the tenant matches the file");
         return;
     }
     for change in &plan.changes {
+        if matches!(change.action, ConfigChangeAction::Unrecognised(_))
+            || matches!(change.resource, ConfigResource::Unrecognised(_))
+        {
+            crate::update_message(&crate::unrecognised_response(endpoint));
+        }
         println!("{}", change.description);
     }
 }
@@ -330,7 +340,7 @@ pub fn print_plan(plan: &ConfigPlan) {
 pub async fn plan(client: &Client, file: &Path, lookup: impl Fn(&str) -> Option<String>) -> Result<ConfigPlan> {
     let config = parse(file)?;
     let files = bundle::read(file, &config)?;
-    let sent = secret_values(&config.secret_sets, &lookup);
+    let sent = secret_values(&config.secret_sets, &lookup)?;
     let body = TenantConfigPlanRequest {
         expiry_values: expiry_values(&config, &lookup)?,
         files: files.iter().map(bundle::digest).collect::<Result<_>>()?,
@@ -340,19 +350,19 @@ pub async fn plan(client: &Client, file: &Path, lookup: impl Fn(&str) -> Option<
             .collect(),
         config,
     };
-    answer(client.tenant_configs_plan(&body), "planning the tenant config").await
+    crate::answered(client.tenant_configs_plan(&body).await, || client.baseurl().to_string())
 }
 
 pub async fn apply(client: &Client, file: &Path, lookup: impl Fn(&str) -> Option<String>) -> Result<ConfigPlan> {
     let config = parse(file)?;
     let files = bundle::read(file, &config)?;
-    let values = secret_values(&config.secret_sets, &lookup);
-    let personas = answer(client.personas_list(), "listing personas").await?;
+    let values = secret_values(&config.secret_sets, &lookup)?;
+    let personas = crate::answered(client.personas_list().await, || client.baseurl().to_string())?;
     let held: HashSet<&str> = personas
         .iter()
         .flat_map(|persona| persona.files.iter())
-        .map(|file| held_digest(file).as_str())
-        .collect();
+        .map(|file| Ok(held_digest(file, client.baseurl())?.as_str()))
+        .collect::<Result<_>>()?;
     let mut writes = Vec::with_capacity(files.len());
     for local in &files {
         writes.push(bundle::write(client, local, held.contains(local.digest.as_str())).await?);
@@ -376,7 +386,9 @@ pub async fn apply(client: &Client, file: &Path, lookup: impl Fn(&str) -> Option
             .collect::<Result<_>>()?,
         config,
     };
-    answer(client.tenant_configs_apply(&body), "applying the tenant config").await
+    crate::answered(client.tenant_configs_apply(&body).await, || {
+        client.baseurl().to_string()
+    })
 }
 
 fn env_name(secret_set: &SecretSet, key: &str) -> Result<EnvironmentVariableName> {
@@ -400,8 +412,9 @@ fn env_name(secret_set: &SecretSet, key: &str) -> Result<EnvironmentVariableName
         .map_err(|error| anyhow!("{name:?} is not a usable environment variable name: {error}"))
 }
 
-fn starter_member(secret_set: &SecretSet, key: &SecretKey) -> Result<ConfigSecret> {
+fn starter_member(secret_set: &SecretSet, key: &SecretKey, endpoint: &str) -> Result<ConfigSecret> {
     Ok(match key {
+        SecretKey::Unrecognised(_) => return Err(crate::unrecognised_response(endpoint).into()),
         SecretKey::SecretVariableKey(variable) => ConfigSecretVariable {
             kind: ConfigSecretVariableKind::Variable,
             name: variable.name.clone(),
@@ -413,7 +426,7 @@ fn starter_member(secret_set: &SecretSet, key: &SecretKey) -> Result<ConfigSecre
         SecretKey::ApiKeyKey(api_key) => ConfigApiKey {
             kind: ConfigApiKeyKind::ApiKey,
             name: api_key.name.clone(),
-            provider: api_key.provider,
+            provider: api_key.provider.clone(),
             value_from: SecretValueSource {
                 env: env_name(secret_set, &api_key.name)?,
             },
@@ -423,7 +436,7 @@ fn starter_member(secret_set: &SecretSet, key: &SecretKey) -> Result<ConfigSecre
             expires_at: token.expires_at.into(),
             kind: ConfigSubscriptionTokenKind::SubscriptionToken,
             name: token.name.clone(),
-            provider: token.provider,
+            provider: token.provider.clone(),
             value_from: SecretValueSource {
                 env: env_name(secret_set, &token.name)?,
             },
@@ -477,7 +490,27 @@ fn starter_triggers(personas: &[Persona], triggers: &[Trigger]) -> Result<Vec<Co
         .collect()
 }
 
-pub fn starter(live: &Live) -> Result<TenantConfig> {
+fn starter_hosts(hosts: &[Host], endpoint: &str) -> Result<Vec<ConfigHost>> {
+    hosts
+        .iter()
+        .filter_map(|host| {
+            let (state, host_id, labels) = match host {
+                Host::OnlineHost(host) => (&host.state, &host.host_id, &host.labels),
+                Host::DegradedHost(host) => (&host.state, &host.host_id, &host.labels),
+                Host::OfflineHost(host) => (&host.state, &host.host_id, &host.labels),
+                Host::Unrecognised(_) => return Some(Err(crate::unrecognised_response(endpoint).into())),
+            };
+            (state != &HostState::Revoked).then(|| {
+                Ok(ConfigHost {
+                    host_id: host_id.clone(),
+                    labels: labels.clone(),
+                })
+            })
+        })
+        .collect()
+}
+
+pub fn starter(live: &Live, endpoint: &str) -> Result<TenantConfig> {
     let secret_sets = live
         .secret_sets
         .iter()
@@ -487,12 +520,16 @@ pub fn starter(live: &Live) -> Result<TenantConfig> {
                 secrets: secret_set
                     .keys
                     .iter()
-                    .map(|key| starter_member(secret_set, key))
+                    .map(|key| starter_member(secret_set, key, endpoint))
                     .collect::<Result<_>>()?,
             })
         })
         .collect::<Result<_>>()?;
-    let connector_names: HashMap<&str, &DisplayName> = live.connectors.iter().map(connector_identity).collect();
+    let connector_names: HashMap<&str, &DisplayName> = live
+        .connectors
+        .iter()
+        .map(|connector| connector_identity(connector, endpoint))
+        .collect::<Result<_>>()?;
     let set_names: HashMap<&str, &SecretSet> = live
         .secret_sets
         .iter()
@@ -529,7 +566,7 @@ pub fn starter(live: &Live) -> Result<TenantConfig> {
                     })
                     .collect::<Result<_>>()?;
                 Ok(ConfigPersona {
-                    box_retention: Some(persona.box_retention),
+                    box_retention: Some(persona.box_retention.clone()),
                     box_memory_mib: persona.box_memory_mib,
                     box_disk_mib: persona.box_disk_mib,
                     connector_names,
@@ -537,17 +574,17 @@ pub fn starter(live: &Live) -> Result<TenantConfig> {
                         .files
                         .iter()
                         .map(|file| {
-                            let from = starter_path(&persona.name, held_path(file));
+                            let from = starter_path(&persona.name, held_path(file, endpoint)?);
                             Ok(ConfigPersonaFile {
                                 from: from
                                     .clone()
                                     .try_into()
                                     .map_err(|error| anyhow!("{from} is not a usable local path: {error}"))?,
-                                path: held_path(file).clone(),
+                                path: held_path(file, endpoint)?.clone(),
                             })
                         })
                         .collect::<Result<_>>()?,
-                    harness: persona.harness,
+                    harness: persona.harness.clone(),
                     name: persona.name.clone(),
                     secret_set_name: secret_set.name.clone(),
                     tumpel_mcp: Some(persona.tumpel_mcp),
@@ -560,19 +597,11 @@ pub fn starter(live: &Live) -> Result<TenantConfig> {
             .iter()
             .filter(|pin| pin.pinned)
             .map(|pin| HarnessPinCreate {
-                harness: pin.harness,
+                harness: pin.harness.clone(),
                 harness_version: pin.harness_version.clone(),
             })
             .collect(),
-        hosts: live
-            .hosts
-            .iter()
-            .filter(|host| host.state != HostState::Revoked)
-            .map(|host| ConfigHost {
-                host_id: host.host_id.clone(),
-                labels: host.labels.clone(),
-            })
-            .collect(),
+        hosts: starter_hosts(&live.hosts, endpoint)?,
     })
 }
 

@@ -54,3 +54,7 @@ npm test
 ## Licence
 
 Apache-2.0. See `LICENSE` and `NOTICE`.
+
+## Server compatibility
+
+The CLI prints one update message when the server sends a response it does not recognise. Printable JSON still appears on stdout. When the command cannot continue, it exits with code 3; other command failures use code 1 and argument errors use code 2.
