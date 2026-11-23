@@ -355,12 +355,12 @@ enum PersonaCommand {
         persona_id: String,
     },
     /// Replace a persona with a `PersonaUpdate` JSON file, or change the parts its flags name; --persona-file replaces the whole file set.
-    #[command(group(ArgGroup::new("change").required(true).multiple(true).args(["file", "name", "secret_set_id", "persona_file", "connector", "no_connectors", "box_memory_mib", "box_disk_mib", "box_retention"])))]
+    #[command(group(ArgGroup::new("change").required(true).multiple(true).args(["file", "name", "secret_set_id", "persona_file", "connector", "no_connectors", "box_memory_mib", "box_disk_mib", "box_retention", "tumpel_mcp"])))]
     Update {
         /// The `personaId` that tumpel persona list prints.
         persona_id: String,
         /// The `PersonaUpdate` JSON file.
-        #[arg(long, conflicts_with_all = ["name", "secret_set_id", "persona_file", "connector", "no_connectors", "box_memory_mib", "box_disk_mib", "box_retention"])]
+        #[arg(long, conflicts_with_all = ["name", "secret_set_id", "persona_file", "connector", "no_connectors", "box_memory_mib", "box_disk_mib", "box_retention", "tumpel_mcp"])]
         file: Option<PathBuf>,
         /// The new persona name; left out, the name stays.
         #[arg(long)]
@@ -386,6 +386,9 @@ enum PersonaCommand {
         /// What happens to a session's box after each turn: Off, Warm or Auto; left out, the mode stays.
         #[arg(long, value_name = "Off|Warm|Auto")]
         box_retention: Option<String>,
+        /// Whether every session of the persona reaches the Tumpel MCP server; left out, the setting stays.
+        #[arg(long, value_name = "true|false")]
+        tumpel_mcp: Option<bool>,
     },
     /// Change the persona fields its flags name; every other field and every file stays.
     #[command(group(ArgGroup::new("change").required(true).multiple(true).args(["name", "secret_set_id", "connector", "box_memory_mib", "box_disk_mib", "box_retention", "tumpel_mcp"])))]
@@ -1894,6 +1897,32 @@ mod tests {
     #[test]
     fn trigger_create_takes_a_file_alone() {
         assert!(parses(&["trigger", "create", "--file", "trigger.json"]));
+    }
+
+    #[test]
+    fn persona_update_takes_tumpel_mcp_as_a_change_and_conflicts_with_a_file() {
+        for value in ["true", "false"] {
+            let cli = Cli::try_parse_from(["tumpel", "persona", "update", "p1", "--tumpel-mcp", value])
+                .expect("the MCP setting alone changes a persona");
+            let Command::Persona {
+                command: PersonaCommand::Update { tumpel_mcp, .. },
+            } = cli.command
+            else {
+                panic!("expected a persona update");
+            };
+            assert_eq!(tumpel_mcp, Some(value == "true"));
+            assert!(!parses(&[
+                "persona",
+                "update",
+                "p1",
+                "--file",
+                "f.json",
+                "--tumpel-mcp",
+                value
+            ]));
+        }
+        assert!(!parses(&["persona", "update", "p1", "--tumpel-mcp"]));
+        assert!(!parses(&["persona", "update", "p1", "--tumpel-mcp", "yes"]));
     }
 
     #[test]
