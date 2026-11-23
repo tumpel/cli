@@ -95,12 +95,7 @@ fn sessions_fail_with_code_three_and_only_the_update_message_on_unreadable_respo
         (vec!["session", "list"], "/v1/sessions"),
         (vec!["session", "get", "session-1"], "/v1/sessions/session-1"),
     ] {
-        for (status, body) in [
-            (299, "{}"),
-            (503, "<html>future response</html>"),
-            (200, "not JSON"),
-            (200, "null"),
-        ] {
+        for (status, body) in [(299, "{}"), (503, "<html>future response</html>"), (200, "not JSON")] {
             let (output, notice) = scenario(&args, path, status, body);
             assert_eq!(output.status.code(), Some(3));
             assert_eq!(String::from_utf8(output.stderr).unwrap(), notice);

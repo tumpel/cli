@@ -1529,7 +1529,7 @@ fn shown<T: Serialize, P: ProblemText + Send + Sync + 'static>(
                 Ok(value) => value,
                 Err(_) => return Err(response.into()),
             };
-            if !(value.is_object() || value.is_array()) || problem_fields(&value).is_some() {
+            if problem_fields(&value).is_some() {
                 return Err(response.into());
             }
             update_message(&response);
@@ -1805,6 +1805,19 @@ mod tests {
             shown(outcome, String::new).unwrap(),
             serde_json::json!({"tenant": {"tenantId": "7d0f0b8e-0000-4000-8000-000000000001"}})
         );
+    }
+
+    #[test]
+    fn prints_scalar_answers_this_cli_cannot_decode() {
+        for body in ["null", r#""future response""#, "42", "true", "false"] {
+            let error = serde_json::from_str::<Whoami>(body).unwrap_err();
+            let outcome: Result<ResponseValue<Whoami>, Error<Problem>> =
+                Err(Error::InvalidResponsePayload(body.as_bytes().to_vec().into(), error));
+            assert_eq!(
+                shown(outcome, String::new).unwrap(),
+                serde_json::from_str::<serde_json::Value>(body).unwrap()
+            );
+        }
     }
 
     #[test]
