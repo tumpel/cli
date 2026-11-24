@@ -13,6 +13,9 @@ mod resources;
 mod sessions;
 mod subscriptions;
 mod tenant_config;
+#[cfg(test)]
+#[path = "../tests/support/mod.rs"]
+mod test_support;
 mod triggers;
 
 use anyhow::{bail, Context, Result};
@@ -1554,12 +1557,17 @@ impl<T: Serialize, P: ProblemText> ApiResponse<T, P> {
     }
 }
 
-fn response<T, P: ProblemText + Send + Sync + 'static>(
+fn response<T: tumpel_api::ContainsUnrecognised, P: ProblemText + Send + Sync + 'static>(
     outcome: Result<ResponseValue<T>, Error<P>>,
     call: impl FnOnce() -> String,
 ) -> Result<ApiResponse<T, P>> {
     match outcome {
-        Ok(answer) => Ok(ApiResponse::Answer(answer.into_inner())),
+        Ok(answer) => {
+            if answer.contains_unrecognised() {
+                update_message(&unrecognised_response(&call()));
+            }
+            Ok(ApiResponse::Answer(answer.into_inner()))
+        }
         Err(Error::ErrorResponse(problem)) if !problem.is_unrecognised() => {
             Ok(ApiResponse::Refusal(problem.into_inner()))
         }
@@ -1577,14 +1585,14 @@ fn response<T, P: ProblemText + Send + Sync + 'static>(
     }
 }
 
-fn answered<T, P: ProblemText + Send + Sync + 'static>(
+fn answered<T: tumpel_api::ContainsUnrecognised, P: ProblemText + Send + Sync + 'static>(
     outcome: Result<ResponseValue<T>, Error<P>>,
     call: impl FnOnce() -> String,
 ) -> Result<T> {
     response(outcome, call)?.required()
 }
 
-fn shown<T: Serialize, P: ProblemText + Send + Sync + 'static>(
+fn shown<T: Serialize + tumpel_api::ContainsUnrecognised, P: ProblemText + Send + Sync + 'static>(
     outcome: Result<ResponseValue<T>, Error<P>>,
     call: impl FnOnce() -> String,
 ) -> Result<serde_json::Value> {
@@ -1749,17 +1757,14 @@ async fn tenant_config(command: ConfigCommand) -> Result<()> {
             Ok(())
         }
         ConfigCommand::Plan { file } => {
-            let (credentials, client) = signed_in()?;
-            tenant_config::print_plan(
-                &tenant_config::plan(&client, &file, |name| std::env::var(name).ok()).await?,
-                &credentials.endpoint,
-            );
+            let (_, client) = signed_in()?;
+            tenant_config::print_plan(&tenant_config::plan(&client, &file, |name| std::env::var(name).ok()).await?);
             Ok(())
         }
         ConfigCommand::Apply { file } => {
-            let (credentials, client) = signed_in()?;
+            let (_, client) = signed_in()?;
             let applied = tenant_config::apply(&client, &file, |name| std::env::var(name).ok()).await?;
-            tenant_config::print_plan(&applied, &credentials.endpoint);
+            tenant_config::print_plan(&applied);
             eprintln!("applied {} changes", applied.changes.len());
             Ok(())
         }

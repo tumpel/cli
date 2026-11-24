@@ -8,11 +8,10 @@ use std::num::NonZeroU32;
 use std::str::FromStr;
 use std::time::Duration;
 use tumpel_api::types::{
-    BoxRetention, EntityId, Problem, Session, SessionStart, SessionStartFromIssue, SessionState, SessionTag,
-    SessionTags, SessionTagsPatch, StartedSession, StartedSessionFromIssue, SteerCreate, TranscriptPage, Turn,
-    TurnFailureReason, TurnSend,
+    BoxRetention, EntityId, Session, SessionStart, SessionStartFromIssue, SessionState, SessionTag, SessionTags,
+    SessionTagsPatch, SteerCreate, TranscriptPage, Turn, TurnFailureReason, TurnSend,
 };
-use tumpel_api::{Client, Error, ResponseValue};
+use tumpel_api::Client;
 
 const FIRST_BACKOFF: Duration = Duration::from_millis(250);
 const MAX_BACKOFF: Duration = Duration::from_secs(5);
@@ -57,70 +56,13 @@ fn session_parts<'a>(
     })
 }
 
-trait SessionOutput: serde::Serialize {
-    fn sessions(&self) -> &[Session];
-}
-
-impl SessionOutput for Session {
-    fn sessions(&self) -> &[Session] {
-        std::slice::from_ref(self)
-    }
-}
-
-impl SessionOutput for Vec<Session> {
-    fn sessions(&self) -> &[Session] {
-        self
-    }
-}
-
-impl SessionOutput for StartedSession {
-    fn sessions(&self) -> &[Session] {
-        std::slice::from_ref(&self.session)
-    }
-}
-
-impl SessionOutput for StartedSessionFromIssue {
-    fn sessions(&self) -> &[Session] {
-        std::slice::from_ref(&self.session)
-    }
-}
-
-fn shown_sessions<T: SessionOutput>(
-    outcome: Result<ResponseValue<T>, Error<Problem>>,
-    call: impl FnOnce() -> String,
-) -> Result<serde_json::Value> {
-    let call = call();
-    let outcome = response(outcome, || call.clone())?;
-    session_output(outcome, &call)
-}
-
-fn session_output<T: SessionOutput>(outcome: ApiResponse<T, Problem>, call: &str) -> Result<serde_json::Value> {
-    if let ApiResponse::Answer(answer) = &outcome {
-        for session in answer.sessions() {
-            match session_parts(session, call) {
-                Err(response) => crate::update_message(&response),
-                Ok((_, turn)) => {
-                    if matches!(turn, Turn::Unrecognised(_))
-                        || matches!(turn, Turn::FailedTurn(turn) if matches!(turn.reason, TurnFailureReason::Unrecognised(_)))
-                    {
-                        crate::update_message(&crate::unrecognised_response(call));
-                    }
-                }
-            }
-        }
-    }
-    outcome.shown()
-}
-
 async fn set_tags(client: &Client, endpoint: &str, session_id: &str, values: &[String]) -> Result<()> {
     let session = id("sessionId", session_id)?;
     let body = SessionTags {
         tags: tags("tag", values)?,
     };
-    print_json(&shown_sessions(
-        client.sessions_set_tags(&session, &body).await,
-        || format!("{endpoint}/v1/sessions/{session_id}/tags"),
-    )?)
+    let outcome = client.sessions_set_tags(&session, &body).await;
+    print_json(&shown(outcome, || format!("{endpoint}/v1/sessions/{session_id}/tags"))?)
 }
 
 async fn patch_tags(
@@ -135,10 +77,8 @@ async fn patch_tags(
         add: tags("--add", add)?,
         remove: tags("--remove", remove)?,
     };
-    print_json(&shown_sessions(
-        client.sessions_patch_tags(&session, &body).await,
-        || format!("{endpoint}/v1/sessions/{session_id}/tags"),
-    )?)
+    let outcome = client.sessions_patch_tags(&session, &body).await;
+    print_json(&shown(outcome, || format!("{endpoint}/v1/sessions/{session_id}/tags"))?)
 }
 
 pub async fn session(command: SessionCommand) -> Result<()> {
@@ -161,7 +101,7 @@ pub async fn session(command: SessionCommand) -> Result<()> {
                 repository: parsed("--repository", &repository)?,
                 tags: tags("--tag", &tag)?,
             };
-            print_json(&shown_sessions(client.sessions_start(&body).await, || {
+            print_json(&shown(client.sessions_start(&body).await, || {
                 format!("{endpoint}/v1/sessions")
             })?)
         }
@@ -183,13 +123,13 @@ pub async fn session(command: SessionCommand) -> Result<()> {
                 name: parsed("--name", &name)?,
                 tags: tags("--tag", &tag)?,
             };
-            print_json(&shown_sessions(client.sessions_start_from_issue(&body).await, || {
+            print_json(&shown(client.sessions_start_from_issue(&body).await, || {
                 format!("{endpoint}/v1/sessions/from-issue")
             })?)
         }
         SessionCommand::Get { session_id } => {
             let session = id("sessionId", &session_id)?;
-            print_json(&shown_sessions(client.sessions_get(&session).await, || {
+            print_json(&shown(client.sessions_get(&session).await, || {
                 format!("{endpoint}/v1/sessions/{session_id}")
             })?)
         }
@@ -210,7 +150,7 @@ pub async fn session(command: SessionCommand) -> Result<()> {
             cancel_turn,
         } => {
             let session = id("sessionId", &session_id)?;
-            print_json(&shown_sessions(
+            print_json(&shown(
                 client.sessions_stop(&session, cancel_turn.then_some(true)).await,
                 || format!("{endpoint}/v1/sessions/{session_id}/stop"),
             )?)
@@ -260,7 +200,7 @@ async fn list(
         .transpose()?;
     let tags = tags("--tag", tag)?;
     let trigger = trigger.map(|value| id("--trigger", &value)).transpose()?;
-    print_json(&shown_sessions(
+    print_json(&shown(
         client
             .sessions_list(
                 host.as_ref(),
@@ -371,7 +311,7 @@ async fn archive(
 ) -> Result<()> {
     if let [session_id] = session_ids {
         let session = id("sessionId", session_id)?;
-        return print_json(&shown_sessions(client.sessions_archive(&session).await, || {
+        return print_json(&shown(client.sessions_archive(&session).await, || {
             format!("{endpoint}/v1/sessions/{session_id}/archive")
         })?);
     }
@@ -404,7 +344,7 @@ async fn archive(
             ApiResponse::Refusal(problem) => {
                 refused.push(format!("session {}: {}", **session, problem_text(&problem)));
             }
-            outcome => archived.push(session_output(outcome, endpoint)?),
+            outcome => archived.push(outcome.shown()?),
         }
     }
     print_json(&archived)?;
@@ -588,46 +528,9 @@ fn turn_outcome(last: Turn, endpoint: &str) -> Result<Option<String>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{headed_lines, session_output, spend, turn_outcome, Spent};
-    use crate::ApiResponse;
+    use super::{headed_lines, spend, turn_outcome, Spent};
     use std::num::NonZeroU32;
     use tumpel_api::types::EntityId;
-    use tumpel_api::types::Session;
-
-    #[test]
-    fn session_output_preserves_future_variants_and_their_fields() {
-        let outcome = ApiResponse::Answer(vec![
-            Session::Unrecognised(serde_json::json!({"state": "FutureState", "extra": true})),
-            Session::Unrecognised(serde_json::json!({"state": "AnotherFutureState"})),
-        ]);
-        assert_eq!(
-            session_output(outcome, "https://example.test").unwrap(),
-            serde_json::json!([
-                {"state": "FutureState", "extra": true}, {"state": "AnotherFutureState"}
-            ])
-        );
-    }
-
-    #[test]
-    fn session_output_preserves_an_undecodable_printable_answer() {
-        let outcome: ApiResponse<Session, _> = ApiResponse::Unrecognised(
-            crate::unrecognised_response("https://example.test"),
-            Some(serde_json::json!({"state": {"future": true}})),
-        );
-        assert_eq!(
-            session_output(outcome, "https://example.test").unwrap(),
-            serde_json::json!({"state": {"future": true}})
-        );
-    }
-
-    #[test]
-    fn session_output_stops_bulk_archive_on_an_unrecognised_refusal() {
-        let outcome: ApiResponse<Session, _> =
-            ApiResponse::Unrecognised(crate::unrecognised_response("https://example.test"), None);
-        assert!(session_output(outcome, "https://example.test")
-            .unwrap_err()
-            .is::<crate::UnrecognisedResponse>());
-    }
 
     fn lines(count: u32) -> NonZeroU32 {
         NonZeroU32::new(count).expect("a test limit is not zero")

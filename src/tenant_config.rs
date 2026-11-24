@@ -4,9 +4,9 @@ use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Write;
 use std::path::Path;
+use tumpel_api::types::{ApiKeyUpdate, ApiKeyUpdateKind, ApiKeyValue, ApiKeyValueKind, ConfigApiKey, ConfigApiKeyKind};
+use tumpel_api::types::{ConfigExpiry, ConfigExpiryValue, ConfigHost, ConfigPersona, ConfigPersonaFile, ConfigPlan};
 use tumpel_api::types::{
-    ApiKeyUpdate, ApiKeyUpdateKind, ApiKeyValue, ApiKeyValueKind, ConfigApiKey, ConfigApiKeyKind, ConfigChangeAction,
-    ConfigExpiry, ConfigExpiryValue, ConfigHost, ConfigPersona, ConfigPersonaFile, ConfigPlan, ConfigResource,
     ConfigSecret, ConfigSecretSet, ConfigSecretValue, ConfigSecretVariable, ConfigSecretVariableKind,
     ConfigSubscriptionToken, ConfigSubscriptionTokenKind, ConfigTrigger, Connector, DisplayName,
     EffectiveHarnessVersion, EnvironmentVariableName, HarnessPinCreate, Host, HostState, Persona, PersonaFile,
@@ -322,17 +322,12 @@ pub fn with_kept_values(
         .collect()
 }
 
-pub fn print_plan(plan: &ConfigPlan, endpoint: &str) {
+pub fn print_plan(plan: &ConfigPlan) {
     if plan.changes.is_empty() {
         println!("no changes; the tenant matches the file");
         return;
     }
     for change in &plan.changes {
-        if matches!(change.action, ConfigChangeAction::Unrecognised(_))
-            || matches!(change.resource, ConfigResource::Unrecognised(_))
-        {
-            crate::update_message(&crate::unrecognised_response(endpoint));
-        }
         println!("{}", change.description);
     }
 }
