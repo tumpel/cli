@@ -357,7 +357,7 @@ async fn archive(
             .map(|value| parsed::<DateTime<FixedOffset>>("--last-turn-before", &value))
             .transpose()?;
         paged(
-            async |after: Option<EntityId>| -> Result<Vec<Session>> {
+            async |after: Option<EntityId>| -> Result<Vec<EntityId>> {
                 answered(
                     client
                         .sessions_list(
@@ -371,14 +371,14 @@ async fn archive(
                         )
                         .await,
                     || format!("{endpoint}/v1/sessions"),
-                )
+                )?
+                .iter()
+                .map(|session| Ok(session_parts(session, endpoint)?.0.clone()))
+                .collect()
             },
-            |session| Ok(session_parts(session, endpoint)?.0.clone()),
+            |id| Ok(id.clone()),
         )
         .await?
-        .iter()
-        .map(|session| Ok(session_parts(session, endpoint)?.0.clone()))
-        .collect::<Result<Vec<_>>>()?
     } else {
         session_ids
             .iter()

@@ -67,3 +67,57 @@ async fn session_list_pages_through_every_session_fifty_at_a_time() {
         Value::from(sessions)
     );
 }
+
+#[tokio::test]
+async fn session_archive_by_state_reads_an_exact_multiple_of_fifty_until_an_empty_page() {
+    let sessions: Vec<Value> = (1..=100).map(session).collect();
+    let answers = [&sessions[..50], &sessions[50..100], &sessions[100..]]
+        .into_iter()
+        .map(Value::from)
+        .chain(sessions.iter().cloned())
+        .map(|body| {
+            let body = body.to_string();
+            format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            )
+        })
+        .collect();
+    let (endpoint, served) = support::serve(answers).await;
+    let directory = tempfile::tempdir().unwrap();
+    let credentials = directory.path().join("env");
+    std::fs::write(&credentials, "TUMPEL_TOKEN=scenario-credential\n").unwrap();
+    let output = tokio::time::timeout(
+        Duration::from_secs(10),
+        Command::new(env!("CARGO_BIN_EXE_tumpel"))
+            .env_clear()
+            .env("TUMPEL_ENDPOINT", &endpoint)
+            .env("TUMPEL_ENV_FILE", credentials)
+            .current_dir(directory.path())
+            .args(["session", "archive", "--state", "Idle"])
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .expect("CLI scenario timed out")
+    .unwrap();
+    assert_eq!(String::from_utf8(output.stderr).unwrap(), "");
+    assert_eq!(output.status.code(), Some(0));
+    let archives =
+        (1..=100).map(|number| format!("POST /v1/sessions/00000000-0000-4000-8000-{number:012}/archive HTTP/1.1"));
+    assert_eq!(
+        served.await.unwrap(),
+        [
+            "GET /v1/sessions?limit=50&state=Idle HTTP/1.1".to_string(),
+            "GET /v1/sessions?after=00000000-0000-4000-8000-000000000050&limit=50&state=Idle HTTP/1.1".to_string(),
+            "GET /v1/sessions?after=00000000-0000-4000-8000-000000000100&limit=50&state=Idle HTTP/1.1".to_string(),
+        ]
+        .into_iter()
+        .chain(archives)
+        .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(&output.stdout).unwrap(),
+        Value::from(sessions)
+    );
+}
