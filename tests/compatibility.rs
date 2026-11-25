@@ -73,7 +73,14 @@ async fn session_list_preserves_known_and_future_rows_in_order() {
     ]);
     let mut wire = body.clone();
     wire[0]["extra"] = json!("ignored on a known row");
-    let stdout = http(&["session", "list"], "GET /v1/sessions HTTP/1.1", &wire, 0, true).await;
+    let stdout = http(
+        &["session", "list"],
+        "GET /v1/sessions?limit=50 HTTP/1.1",
+        &wire,
+        0,
+        true,
+    )
+    .await;
     assert_eq!(serde_json::from_str::<Value>(&stdout).unwrap(), body);
 }
 
