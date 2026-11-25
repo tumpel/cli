@@ -9,7 +9,7 @@ use tokio_tungstenite::tungstenite::Message;
 const ID: &str = "00000000-0000-4000-8000-000000000001";
 const OTHER_ID: &str = "00000000-0000-4000-8000-000000000002";
 
-async fn cli(endpoint: &str, directory: &Path, args: &[&str], code: i32) -> String {
+async fn cli(endpoint: &str, directory: &Path, args: &[&str], code: i32, warns: bool) -> String {
     let credentials = directory.join("env");
     std::fs::write(&credentials, "TUMPEL_TOKEN=scenario-credential\n").unwrap();
     let output = tokio::time::timeout(
@@ -28,14 +28,16 @@ async fn cli(endpoint: &str, directory: &Path, args: &[&str], code: i32) -> Stri
     .unwrap();
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert_eq!(output.status.code(), Some(code), "{args:?}: {stderr}");
-    assert_eq!(
-        stderr,
-        format!("the server sent a response this CLI doesn't recognise, please update the CLI: curl -fsSL {endpoint}/v1/releases/install.sh | sh\n"),
-    );
+    let expected = if warns {
+        format!("the server sent a response this CLI doesn't recognise, please update the CLI: curl -fsSL {endpoint}/v1/releases/install.sh | sh\n")
+    } else {
+        String::new()
+    };
+    assert_eq!(stderr, expected);
     String::from_utf8(output.stdout).unwrap()
 }
 
-async fn http(args: &[&str], request: &str, body: &Value, code: i32) -> String {
+async fn http(args: &[&str], request: &str, body: &Value, code: i32, warns: bool) -> String {
     let body = body.to_string();
     let response = format!(
         "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
@@ -48,7 +50,7 @@ async fn http(args: &[&str], request: &str, body: &Value, code: i32) -> String {
         r#"{"personas":[],"secretSets":[],"harnessPins":[],"hosts":[]}"#,
     )
     .unwrap();
-    let stdout = cli(&endpoint, directory.path(), args, code).await;
+    let stdout = cli(&endpoint, directory.path(), args, code, warns).await;
     assert_eq!(served.await.unwrap(), [request]);
     stdout
 }
@@ -71,7 +73,14 @@ async fn session_list_preserves_known_and_future_rows_in_order() {
     ]);
     let mut wire = body.clone();
     wire[0]["extra"] = json!("ignored on a known row");
-    let stdout = http(&["session", "list"], "GET /v1/sessions?limit=50 HTTP/1.1", &wire, 0).await;
+    let stdout = http(
+        &["session", "list"],
+        "GET /v1/sessions?limit=50 HTTP/1.1",
+        &wire,
+        0,
+        true,
+    )
+    .await;
     assert_eq!(serde_json::from_str::<Value>(&stdout).unwrap(), body);
 }
 
@@ -82,6 +91,7 @@ async fn session_transcript_stops_on_a_future_page_form() {
         &format!("GET /v1/sessions/{ID}/transcript?after=0&compact=false HTTP/1.1"),
         &json!({"form": "FutureTranscript", "lines": [], "cursor": 0, "finished": true}),
         3,
+        true,
     )
     .await;
     assert!(stdout.is_empty(), "{stdout}");
@@ -95,6 +105,7 @@ async fn events_wait_prints_a_future_event() {
         "GET /v1/events HTTP/1.1",
         &json!({"events": [event], "lastEventId": 2}),
         0,
+        true,
     )
     .await;
     assert_eq!(serde_json::from_str::<Value>(&stdout).unwrap(), event);
@@ -126,7 +137,7 @@ async fn websocket(connections: Vec<(&'static str, Vec<Message>)>) -> String {
         }
     });
     let directory = tempfile::tempdir().unwrap();
-    let stdout = cli(&endpoint, directory.path(), &["events", "follow"], 3).await;
+    let stdout = cli(&endpoint, directory.path(), &["events", "follow"], 3, true).await;
     served.await.unwrap();
     stdout
 }
@@ -168,7 +179,14 @@ async fn events_follow_prints_a_changed_shape_and_continues_until_malformed_json
 #[tokio::test]
 async fn host_get_prints_a_future_presence() {
     let body = json!({"presence": "FuturePresence", "hostId": ID, "extra": true});
-    let stdout = http(&["host", "get", ID], &format!("GET /v1/hosts/{ID} HTTP/1.1"), &body, 0).await;
+    let stdout = http(
+        &["host", "get", ID],
+        &format!("GET /v1/hosts/{ID} HTTP/1.1"),
+        &body,
+        0,
+        true,
+    )
+    .await;
     assert_eq!(serde_json::from_str::<Value>(&stdout).unwrap(), body);
 }
 
@@ -182,6 +200,7 @@ async fn config_plan_prints_the_description_of_a_future_action() {
             {"action": "FutureAction", "resource": "Persona", "name": "Review", "description": "Migrate Review"}
         ]}),
         0,
+        true,
     )
     .await;
     assert_eq!(stdout, "Update Build\nMigrate Review\n");
@@ -196,7 +215,59 @@ async fn config_apply_stops_when_a_live_persona_file_cannot_be_used_for_a_write(
                  "boxRetention": "Off", "connectorIds": [], "files": [{"kind": "FutureFile", "extra": true}],
                  "tumpelMcp": false, "createdAt": 1, "updatedAt": 1}]),
         3,
+        true,
     )
     .await;
     assert!(stdout.is_empty(), "{stdout}");
+}
+
+#[tokio::test]
+async fn turn_get_prints_a_failed_turn_with_a_future_reason() {
+    let body = json!({"state": "Failed", "reason": "FutureFailure", "detail": "The box went away",
+                      "failedAt": "2026-11-24T00:00:00Z", "turnId": ID, "sessionId": ID, "tenantId": ID,
+                      "boxId": ID, "prompt": "Review", "lineCount": 0, "createdAt": 1, "updatedAt": 1});
+    let stdout = http(
+        &["turn", "get", ID],
+        &format!("GET /v1/turns/{ID} HTTP/1.1"),
+        &body,
+        0,
+        true,
+    )
+    .await;
+    assert_eq!(serde_json::from_str::<Value>(&stdout).unwrap(), body);
+}
+
+#[tokio::test]
+async fn subscription_get_prints_a_paused_subscription_with_a_future_reason() {
+    let body = json!({"state": "Paused", "reason": {"kind": "FuturePause", "message": "keep this"},
+                      "pausedAt": "2026-11-24T00:00:00Z", "subscriptionId": ID, "sessionId": ID, "tenantId": ID,
+                      "crewTags": [], "events": ["TurnFailed"], "cursorEventId": 0, "crewFailuresInARow": 0,
+                      "deliveryFailuresInARow": 0, "expiresAt": "2026-11-25T00:00:00Z", "goal": "Done",
+                      "prompt": "Review", "createdAt": 1, "updatedAt": 1});
+    let stdout = http(
+        &["subscription", "get", ID],
+        &format!("GET /v1/subscriptions/{ID} HTTP/1.1"),
+        &body,
+        0,
+        true,
+    )
+    .await;
+    assert_eq!(serde_json::from_str::<Value>(&stdout).unwrap(), body);
+}
+
+#[tokio::test]
+async fn turn_get_prints_a_known_turn_with_an_extra_field_without_the_update_message() {
+    let body = json!({"state": "Offered", "turnId": ID, "sessionId": ID, "tenantId": ID, "boxId": ID,
+                      "prompt": "Review", "lineCount": 0, "createdAt": 1, "updatedAt": 1});
+    let mut wire = body.clone();
+    wire["extra"] = json!(true);
+    let stdout = http(
+        &["turn", "get", ID],
+        &format!("GET /v1/turns/{ID} HTTP/1.1"),
+        &wire,
+        0,
+        false,
+    )
+    .await;
+    assert_eq!(serde_json::from_str::<Value>(&stdout).unwrap(), body);
 }
