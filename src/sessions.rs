@@ -16,6 +16,7 @@ use tumpel_api::Client;
 const FIRST_BACKOFF: Duration = Duration::from_millis(250);
 const MAX_BACKOFF: Duration = Duration::from_secs(5);
 const PAGE_LINES: NonZeroU32 = NonZeroU32::new(1000).expect("1000 is not zero");
+const PAGE_SESSIONS: NonZeroU32 = NonZeroU32::new(50).expect("50 is not zero");
 
 pub(crate) fn parsed<T>(flag: &str, value: &str) -> Result<T>
 where
@@ -200,18 +201,51 @@ async fn list(
         .transpose()?;
     let tags = tags("--tag", tag)?;
     let trigger = trigger.map(|value| id("--trigger", &value)).transpose()?;
-    print_json(&shown(
-        client
-            .sessions_list(
-                host.as_ref(),
-                before.as_ref(),
-                state,
-                (!tags.is_empty()).then_some(&tags),
-                trigger.as_ref(),
-            )
-            .await,
-        || format!("{endpoint}/v1/sessions"),
-    )?)
+    let sessions = paged(
+        async |after: Option<EntityId>| -> Result<Vec<serde_json::Value>> {
+            let page = shown(
+                client
+                    .sessions_list(
+                        after.as_ref(),
+                        host.as_ref(),
+                        before.as_ref(),
+                        Some(PAGE_SESSIONS),
+                        state.clone(),
+                        (!tags.is_empty()).then_some(&tags),
+                        trigger.as_ref(),
+                    )
+                    .await,
+                || format!("{endpoint}/v1/sessions"),
+            )?;
+            let serde_json::Value::Array(rows) = page else {
+                return Err(crate::unrecognised_response(endpoint).into());
+            };
+            Ok(rows)
+        },
+        |row: &serde_json::Value| {
+            serde_json::from_value(row["sessionId"].clone())
+                .map_err(|_| anyhow::Error::from(crate::unrecognised_response(endpoint)))
+        },
+    )
+    .await?;
+    print_json(&sessions)
+}
+
+async fn paged<T>(
+    mut page: impl AsyncFnMut(Option<EntityId>) -> Result<Vec<T>>,
+    last_id: impl Fn(&T) -> Result<EntityId>,
+) -> Result<Vec<T>> {
+    let mut rows = Vec::new();
+    let mut after = None;
+    loop {
+        let next = page(after).await?;
+        let last = next.last().filter(|_| next.len() == PAGE_SESSIONS.get() as usize);
+        after = last.map(&last_id).transpose()?;
+        rows.extend(next);
+        if after.is_none() {
+            return Ok(rows);
+        }
+    }
 }
 
 pub async fn turn(command: TurnCommand) -> Result<()> {
@@ -322,12 +356,28 @@ async fn archive(
         let before = last_turn_before
             .map(|value| parsed::<DateTime<FixedOffset>>("--last-turn-before", &value))
             .transpose()?;
-        answered(
-            client.sessions_list(None, before.as_ref(), state, None, None).await,
-            || format!("{endpoint}/v1/sessions"),
-        )?
-        .into_iter()
-        .map(|session| Ok(session_parts(&session, endpoint)?.0.clone()))
+        paged(
+            async |after: Option<EntityId>| -> Result<Vec<Session>> {
+                answered(
+                    client
+                        .sessions_list(
+                            after.as_ref(),
+                            None,
+                            before.as_ref(),
+                            Some(PAGE_SESSIONS),
+                            state.clone(),
+                            None,
+                            None,
+                        )
+                        .await,
+                    || format!("{endpoint}/v1/sessions"),
+                )
+            },
+            |session| Ok(session_parts(session, endpoint)?.0.clone()),
+        )
+        .await?
+        .iter()
+        .map(|session| Ok(session_parts(session, endpoint)?.0.clone()))
         .collect::<Result<Vec<_>>>()?
     } else {
         session_ids
