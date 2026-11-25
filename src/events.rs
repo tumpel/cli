@@ -146,14 +146,14 @@ async fn follow(after_event_id: Option<i64>, event: &[TenantEventType], session_
         while let Some(message) = socket.next().await {
             let text = match message {
                 Ok(Message::Text(text)) => text,
-                Ok(Message::Close(_)) => return Ok(()),
-                Err(_) => break,
+                Ok(Message::Close(_)) | Err(_) => break,
                 Ok(_) => continue,
             };
-            let unreadable = |_| crate::unrecognised_response(&credentials.endpoint);
-            let event: serde_json::Value = serde_json::from_str(&text).map_err(unreadable)?;
-            let decoded: TenantEvent = serde_json::from_value(event.clone()).map_err(unreadable)?;
-            if decoded.contains_unrecognised() {
+            let event: serde_json::Value =
+                serde_json::from_str(&text).map_err(|_| crate::unrecognised_response(&credentials.endpoint))?;
+            if serde_json::from_value::<TenantEvent>(event.clone())
+                .map_or(true, |decoded| decoded.contains_unrecognised())
+            {
                 crate::update_message(&crate::unrecognised_response(&credentials.endpoint));
             }
             cursor = event.get("eventId").and_then(serde_json::Value::as_i64).or(cursor);
