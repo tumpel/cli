@@ -260,14 +260,8 @@ pub async fn host_get(host_id: String) -> Result<()> {
         tumpel_api::types::Host::OnlineHost(host) => &host.supervisor_update_step,
         tumpel_api::types::Host::DegradedHost(host) => &host.supervisor_update_step,
         tumpel_api::types::Host::OfflineHost(host) => &host.supervisor_update_step,
-        tumpel_api::types::Host::Unrecognised(_) => {
-            crate::update_message(&crate::unrecognised_response(&credentials.endpoint));
-            return Ok(());
-        }
+        tumpel_api::types::Host::Unrecognised(_) => return Ok(()),
     };
-    if matches!(step, SupervisorUpdateLatestStep::Unrecognised(_)) {
-        crate::update_message(&crate::unrecognised_response(&credentials.endpoint));
-    }
     if let SupervisorUpdateLatestStep::StepReported(reported) = step {
         if reported.step.phase == SupervisorUpdatePhase::Staged {
             eprintln!(

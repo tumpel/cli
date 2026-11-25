@@ -7,6 +7,7 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::{Error as WsError, Message};
 use tumpel_api::types::{EntityId, Sequence, TenantEventType};
+use tumpel_api::{types::TenantEvent, ContainsUnrecognised};
 
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 const RECONNECT_AFTER: Duration = Duration::from_secs(1);
@@ -149,7 +150,12 @@ async fn follow(after_event_id: Option<i64>, event: &[TenantEventType], session_
                 Ok(_) => continue,
             };
             let event: serde_json::Value =
-                serde_json::from_str(&text).context("the event stream sent a line that is not JSON")?;
+                serde_json::from_str(&text).map_err(|_| crate::unrecognised_response(&credentials.endpoint))?;
+            if serde_json::from_value::<TenantEvent>(event.clone())
+                .map_or(true, |decoded| decoded.contains_unrecognised())
+            {
+                crate::update_message(&crate::unrecognised_response(&credentials.endpoint));
+            }
             cursor = event.get("eventId").and_then(serde_json::Value::as_i64).or(cursor);
             if names_session(&event, session_id) {
                 println!("{text}");

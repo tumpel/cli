@@ -107,32 +107,11 @@ async fn run(client: &Client, endpoint: &str, command: ConnectorCommand) -> Resu
 #[cfg(test)]
 mod tests {
     use super::run;
+    use crate::test_support::serve;
     use crate::ConnectorCommand;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
     use tumpel_api::Client;
 
     const CONNECTOR_ID: &str = "00000000-0000-4000-8000-000000000001";
-
-    /// Answers each request in turn and returns the request line of each.
-    async fn serve(answers: Vec<String>) -> (String, tokio::task::JoinHandle<Vec<String>>) {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let url = format!("http://{}", listener.local_addr().unwrap());
-        let task = tokio::spawn(async move {
-            let mut lines = Vec::new();
-            for answer in answers {
-                let (mut stream, _) = listener.accept().await.unwrap();
-                let mut head = Vec::new();
-                while !head.ends_with(b"\r\n\r\n") {
-                    head.push(stream.read_u8().await.unwrap());
-                }
-                lines.push(String::from_utf8(head).unwrap().lines().next().unwrap().to_string());
-                stream.write_all(answer.as_bytes()).await.unwrap();
-            }
-            lines
-        });
-        (url, task)
-    }
 
     #[tokio::test]
     async fn a_connector_write_sends_the_updated_at_it_just_read() {
