@@ -865,10 +865,10 @@ struct TriggerFields {
     /// A condition as `<field>=<value>`, such as `action=closed`, the field a dotted path into the payload. Repeat a field to match any of its values; conditions on different fields must all hold. Left out, every event of the type matches.
     #[arg(long = "where", value_name = "FIELD=VALUE")]
     condition: Vec<String>,
-    /// The `personaId` of every session it starts; tumpel persona list prints it.
+    /// The `personaId` of every session it starts, or with --session-id that session's persona; tumpel persona list prints it.
     #[arg(long, required = false, required_unless_present = "file")]
     persona_id: String,
-    /// The model of every session it starts, one the persona's harness runs.
+    /// The model of every session it starts, or with --session-id that session's model; one the persona's harness runs.
     #[arg(long, required = false, required_unless_present = "file")]
     model: String,
     /// The prompt, with `{{field}}` placeholders filled from the event, such as `Review {{pull_request.html_url}}`.
