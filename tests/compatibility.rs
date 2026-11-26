@@ -271,3 +271,34 @@ async fn turn_get_prints_a_known_turn_with_an_extra_field_without_the_update_mes
     .await;
     assert_eq!(serde_json::from_str::<Value>(&stdout).unwrap(), body);
 }
+
+#[tokio::test]
+async fn trigger_list_prints_known_triggers_around_a_future_event() {
+    let trigger = |id: &str, event: &str| {
+        json!({"triggerId": id, "tenantId": ID, "principalId": ID, "name": format!("wake-{event}"),
+               "personaId": ID, "model": "test-model", "prompt": "Read {{repository.full_name}}",
+               "source": {"kind": "GitHub", "event": event,
+                          "conditions": [{"field": "repository.full_name", "values": ["example/project"]}]},
+               "createdAt": 1, "updatedAt": 1})
+    };
+    let mut targeted = trigger(ID, "status");
+    targeted["sessionId"] = json!(OTHER_ID);
+    let body = json!([targeted, trigger(OTHER_ID, "future_event"), trigger(ID, "push")]);
+    let stdout = http(&["trigger", "list"], "GET /v1/triggers HTTP/1.1", &body, 0, true).await;
+    assert_eq!(serde_json::from_str::<Value>(&stdout).unwrap(), body);
+}
+
+#[tokio::test]
+async fn trigger_list_prints_check_suite_and_pull_request_review_triggers_without_the_update_message() {
+    let trigger = |event: &str| {
+        json!({"triggerId": ID, "tenantId": ID, "principalId": ID, "name": format!("wake-{event}"),
+               "personaId": ID, "model": "test-model", "prompt": "Read {{repository.full_name}}",
+               "sessionId": OTHER_ID,
+               "source": {"kind": "GitHub", "event": event,
+                          "conditions": [{"field": "repository.full_name", "values": ["example/project"]}]},
+               "createdAt": 1, "updatedAt": 1})
+    };
+    let body = json!([trigger("check_suite"), trigger("pull_request_review")]);
+    let stdout = http(&["trigger", "list"], "GET /v1/triggers HTTP/1.1", &body, 0, false).await;
+    assert_eq!(serde_json::from_str::<Value>(&stdout).unwrap(), body);
+}

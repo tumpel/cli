@@ -1942,7 +1942,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
@@ -2145,7 +2145,7 @@ dependencies = [
 [[package]]
 name = "tumpel-api"
 version = "0.20.1"
-source = "git+https://github.com/tumpel/protocol?tag=v1.0.0-rc.69#cbd2ec0ca0f0adfdafcb696ed7f5ad94de2f9c71"
+source = "git+https://github.com/tumpel/protocol?tag=v1.0.0-rc.77#a6321ca8d8b29abbd4a107995ecf561b5e21bba8"
 dependencies = [
  "chrono",
  "progenitor-client",

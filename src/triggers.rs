@@ -63,6 +63,7 @@ fn trigger_create(file: Option<PathBuf>, fields: Option<TriggerFields>) -> Resul
         name: parsed("--name", &fields.name)?,
         persona_id: id("--persona-id", &fields.persona_id)?,
         prompt: prompt(fields.prompt, fields.prompt_file)?.ok_or_else(|| anyhow!("pass --prompt or --prompt-file"))?,
+        session_id: fields.session_id.map(|value| id("--session-id", &value)).transpose()?,
         source: source(&fields.source, &fields.event, &fields.condition)?,
     })
 }

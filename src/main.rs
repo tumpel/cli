@@ -813,7 +813,7 @@ enum TriggerCommand {
         /// Where the events come from: GitHub.
         #[arg(long, requires = "event")]
         source: Option<String>,
-        /// The event type: `pull_request`, `push`, `status` or `issues`.
+        /// The event type: `pull_request`, `push`, `status`, `issues`, `check_suite` or `pull_request_review`.
         #[arg(long, requires = "source")]
         event: Option<String>,
         /// A condition as `<field>=<value>`, repeated as for create; together they replace every condition, and leaving them out with --event matches every event of the type.
@@ -859,7 +859,7 @@ struct TriggerFields {
     /// Where the events come from: GitHub.
     #[arg(long, required = false, required_unless_present = "file")]
     source: String,
-    /// The event type: `pull_request`, `push`, `status` or `issues`.
+    /// The event type: `pull_request`, `push`, `status`, `issues`, `check_suite` or `pull_request_review`.
     #[arg(long, required = false, required_unless_present = "file")]
     event: String,
     /// A condition as `<field>=<value>`, such as `action=closed`, the field a dotted path into the payload. Repeat a field to match any of its values; conditions on different fields must all hold. Left out, every event of the type matches.
@@ -871,6 +871,9 @@ struct TriggerFields {
     /// The model of every session it starts, one the persona's harness runs.
     #[arg(long, required = false, required_unless_present = "file")]
     model: String,
+    /// The `sessionId` to send the filled prompt to as one turn instead of starting a session; the trigger then deletes itself. --persona-id and --model must be the session's.
+    #[arg(long)]
+    session_id: Option<String>,
     /// The prompt, with `{{field}}` placeholders filled from the event, such as `Review {{pull_request.html_url}}`.
     #[arg(long, required_unless_present_any = ["prompt_file", "file"], conflicts_with = "prompt_file")]
     prompt: Option<String>,
