@@ -304,11 +304,35 @@ async fn trigger_list_prints_check_suite_and_pull_request_review_triggers_withou
 }
 
 #[tokio::test]
-async fn trigger_create_refuses_a_file_with_a_target_before_sending_anything() {
-    let (endpoint, served) = support::serve(vec![]).await;
+async fn trigger_create_sends_the_session_id_and_prints_the_echoed_target() {
+    let body = json!({"triggerId": ID, "tenantId": ID, "principalId": ID, "name": "wake-status",
+                      "personaId": ID, "model": "test-model", "prompt": "Read {{sha}}", "sessionId": OTHER_ID,
+                      "source": {"kind": "GitHub", "event": "status", "conditions": []},
+                      "createdAt": 1, "updatedAt": 1});
+    let stdout = http(
+        &["trigger", "create", "--name", "wake-status", "--source", "GitHub", "--event", "status",
+          "--persona-id", ID, "--model", "test-model", "--prompt", "Read {{sha}}", "--session-id", OTHER_ID],
+        &format!(r#"POST /v1/triggers HTTP/1.1 {{"model":"test-model","name":"wake-status","personaId":"{ID}","prompt":"Read {{{{sha}}}}","sessionId":"{OTHER_ID}","source":{{"conditions":[],"event":"status","kind":"GitHub"}}}}"#),
+        &body,
+        0,
+        false,
+    )
+    .await;
+    assert_eq!(serde_json::from_str::<Value>(&stdout).unwrap(), body);
+}
+
+#[tokio::test]
+async fn trigger_create_sends_the_session_id_from_a_file() {
+    let body = json!({"triggerId": ID, "tenantId": ID, "principalId": ID, "name": "wake-status",
+                      "personaId": ID, "model": "test-model", "prompt": "Read {{sha}}", "sessionId": OTHER_ID,
+                      "source": {"kind": "GitHub", "event": "status", "conditions": []},
+                      "createdAt": 1, "updatedAt": 1});
+    let response = format!(
+        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+        body.to_string().len()
+    );
+    let (endpoint, served) = support::serve(vec![response]).await;
     let directory = tempfile::tempdir().unwrap();
-    let credentials = directory.path().join("env");
-    std::fs::write(&credentials, "TUMPEL_TOKEN=scenario-credential\n").unwrap();
     std::fs::write(
         directory.path().join("trigger.json"),
         json!({"name": "wake-status", "personaId": ID, "model": "test-model", "prompt": "Read {{sha}}",
@@ -316,20 +340,113 @@ async fn trigger_create_refuses_a_file_with_a_target_before_sending_anything() {
         .to_string(),
     )
     .unwrap();
+    let stdout = cli(
+        &endpoint,
+        directory.path(),
+        &["trigger", "create", "--file", "trigger.json"],
+        0,
+        false,
+    )
+    .await;
+    assert_eq!(serde_json::from_str::<Value>(&stdout).unwrap(), body);
+    assert_eq!(
+        served.await.unwrap(),
+        [format!(
+            r#"POST /v1/triggers HTTP/1.1 {{"model":"test-model","name":"wake-status","personaId":"{ID}","prompt":"Read {{{{sha}}}}","sessionId":"{OTHER_ID}","source":{{"conditions":[],"event":"status","kind":"GitHub"}}}}"#
+        )]
+    );
+}
+
+#[tokio::test]
+async fn trigger_create_prints_a_forbidden_target_plainly() {
+    let problem = json!({"code": "Forbidden", "title": "Forbidden",
+                         "detail": "A turn token creates a trigger only for its own session",
+                         "fix": "Pass the sessionId of the session this turn runs in"});
+    let response = format!(
+        "HTTP/1.1 403 Forbidden\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{problem}",
+        problem.to_string().len()
+    );
+    let (endpoint, served) = support::serve(vec![response]).await;
+    let directory = tempfile::tempdir().unwrap();
+    let credentials = directory.path().join("env");
+    std::fs::write(&credentials, "TUMPEL_TOKEN=scenario-credential\n").unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_tumpel"))
         .env_clear()
         .env("TUMPEL_ENDPOINT", &endpoint)
         .env("TUMPEL_ENV_FILE", credentials)
-        .current_dir(directory.path())
-        .args(["trigger", "create", "--file", "trigger.json"])
+        .args([
+            "trigger",
+            "create",
+            "--name",
+            "wake-status",
+            "--source",
+            "GitHub",
+            "--event",
+            "status",
+            "--persona-id",
+            ID,
+            "--model",
+            "test-model",
+            "--prompt",
+            "Read",
+            "--session-id",
+            OTHER_ID,
+        ])
         .output()
         .await
         .unwrap();
     assert_eq!(output.status.code(), Some(1));
     assert_eq!(
         String::from_utf8(output.stderr).unwrap(),
-        "tumpel: this CLI doesn't create session-targeted triggers yet, so remove sessionId from the file\n"
+        "tumpel: Forbidden: A turn token creates a trigger only for its own session. Pass the sessionId of the session this turn runs in\n"
     );
     assert_eq!(String::from_utf8(output.stdout).unwrap(), "");
-    assert_eq!(served.await.unwrap(), Vec::<String>::new());
+    assert_eq!(served.await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn trigger_create_prints_a_reached_trigger_limit_plainly() {
+    let problem = json!({"code": "TriggerLimitReached", "title": "Trigger limit reached",
+                         "detail": "The session already has 10 targeted triggers",
+                         "fix": "Delete one of its triggers first"});
+    let response = format!(
+        "HTTP/1.1 409 Conflict\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{problem}",
+        problem.to_string().len()
+    );
+    let (endpoint, served) = support::serve(vec![response]).await;
+    let directory = tempfile::tempdir().unwrap();
+    let credentials = directory.path().join("env");
+    std::fs::write(&credentials, "TUMPEL_TOKEN=scenario-credential\n").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_tumpel"))
+        .env_clear()
+        .env("TUMPEL_ENDPOINT", &endpoint)
+        .env("TUMPEL_ENV_FILE", credentials)
+        .args([
+            "trigger",
+            "create",
+            "--name",
+            "wake-status",
+            "--source",
+            "GitHub",
+            "--event",
+            "status",
+            "--persona-id",
+            ID,
+            "--model",
+            "test-model",
+            "--prompt",
+            "Read",
+            "--session-id",
+            OTHER_ID,
+        ])
+        .output()
+        .await
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        String::from_utf8(output.stderr).unwrap(),
+        "tumpel: Trigger limit reached: The session already has 10 targeted triggers. Delete one of its triggers first\n"
+    );
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), "");
+    assert_eq!(served.await.unwrap().len(), 1);
 }

@@ -877,6 +877,9 @@ struct TriggerFields {
     /// A file holding the prompt.
     #[arg(long)]
     prompt_file: Option<PathBuf>,
+    /// The `sessionId` each match sends one turn to, instead of starting a session. A session creates this for itself with its own turn token.
+    #[arg(long)]
+    session_id: Option<String>,
 }
 
 #[derive(Subcommand)]
