@@ -330,6 +330,6 @@ async fn trigger_create_refuses_a_file_with_a_target_before_sending_anything() {
         String::from_utf8(output.stderr).unwrap(),
         "tumpel: this CLI doesn't create session-targeted triggers yet, so remove sessionId from the file\n"
     );
-    assert!(output.stdout.is_empty());
-    assert!(served.await.unwrap().is_empty());
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), "");
+    assert_eq!(served.await.unwrap(), Vec::<String>::new());
 }
