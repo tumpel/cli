@@ -271,3 +271,65 @@ async fn turn_get_prints_a_known_turn_with_an_extra_field_without_the_update_mes
     .await;
     assert_eq!(serde_json::from_str::<Value>(&stdout).unwrap(), body);
 }
+
+#[tokio::test]
+async fn trigger_list_prints_known_triggers_around_a_future_event() {
+    let trigger = |id: &str, event: &str| {
+        json!({"triggerId": id, "tenantId": ID, "principalId": ID, "name": format!("wake-{event}"),
+               "personaId": ID, "model": "test-model", "prompt": "Read {{repository.full_name}}",
+               "source": {"kind": "GitHub", "event": event,
+                          "conditions": [{"field": "repository.full_name", "values": ["example/project"]}]},
+               "createdAt": 1, "updatedAt": 1})
+    };
+    let mut targeted = trigger(ID, "status");
+    targeted["sessionId"] = json!(OTHER_ID);
+    let body = json!([targeted, trigger(OTHER_ID, "future_event"), trigger(ID, "push")]);
+    let stdout = http(&["trigger", "list"], "GET /v1/triggers HTTP/1.1", &body, 0, true).await;
+    assert_eq!(serde_json::from_str::<Value>(&stdout).unwrap(), body);
+}
+
+#[tokio::test]
+async fn trigger_list_prints_check_suite_and_pull_request_review_triggers_without_the_update_message() {
+    let trigger = |event: &str| {
+        json!({"triggerId": ID, "tenantId": ID, "principalId": ID, "name": format!("wake-{event}"),
+               "personaId": ID, "model": "test-model", "prompt": "Read {{repository.full_name}}",
+               "sessionId": OTHER_ID,
+               "source": {"kind": "GitHub", "event": event,
+                          "conditions": [{"field": "repository.full_name", "values": ["example/project"]}]},
+               "createdAt": 1, "updatedAt": 1})
+    };
+    let body = json!([trigger("check_suite"), trigger("pull_request_review")]);
+    let stdout = http(&["trigger", "list"], "GET /v1/triggers HTTP/1.1", &body, 0, false).await;
+    assert_eq!(serde_json::from_str::<Value>(&stdout).unwrap(), body);
+}
+
+#[tokio::test]
+async fn trigger_create_refuses_a_file_with_a_target_before_sending_anything() {
+    let (endpoint, served) = support::serve(vec![]).await;
+    let directory = tempfile::tempdir().unwrap();
+    let credentials = directory.path().join("env");
+    std::fs::write(&credentials, "TUMPEL_TOKEN=scenario-credential\n").unwrap();
+    std::fs::write(
+        directory.path().join("trigger.json"),
+        json!({"name": "wake-status", "personaId": ID, "model": "test-model", "prompt": "Read {{sha}}",
+               "sessionId": OTHER_ID, "source": {"kind": "GitHub", "event": "status", "conditions": []}})
+        .to_string(),
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_tumpel"))
+        .env_clear()
+        .env("TUMPEL_ENDPOINT", &endpoint)
+        .env("TUMPEL_ENV_FILE", credentials)
+        .current_dir(directory.path())
+        .args(["trigger", "create", "--file", "trigger.json"])
+        .output()
+        .await
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        String::from_utf8(output.stderr).unwrap(),
+        "tumpel: this CLI doesn't create session-targeted triggers yet, so remove sessionId from the file\n"
+    );
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), "");
+    assert_eq!(served.await.unwrap(), Vec::<String>::new());
+}

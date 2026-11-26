@@ -56,13 +56,20 @@ fn prompt(text: Option<String>, file: Option<PathBuf>) -> Result<Option<Prompt>>
 
 fn trigger_create(file: Option<PathBuf>, fields: Option<TriggerFields>) -> Result<TriggerCreate> {
     let Some(fields) = fields else {
-        return read_json(&file.unwrap_or_default(), "TriggerCreate");
+        let body: TriggerCreate = read_json(&file.unwrap_or_default(), "TriggerCreate")?;
+        if body.session_id.is_some() {
+            return Err(anyhow!(
+                "this CLI doesn't create session-targeted triggers yet, so remove sessionId from the file"
+            ));
+        }
+        return Ok(body);
     };
     Ok(TriggerCreate {
         model: parsed("--model", &fields.model)?,
         name: parsed("--name", &fields.name)?,
         persona_id: id("--persona-id", &fields.persona_id)?,
         prompt: prompt(fields.prompt, fields.prompt_file)?.ok_or_else(|| anyhow!("pass --prompt or --prompt-file"))?,
+        session_id: None,
         source: source(&fields.source, &fields.event, &fields.condition)?,
     })
 }
