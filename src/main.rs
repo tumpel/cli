@@ -871,9 +871,6 @@ struct TriggerFields {
     /// The model of every session it starts, one the persona's harness runs.
     #[arg(long, required = false, required_unless_present = "file")]
     model: String,
-    /// The `sessionId` to send the filled prompt to as one turn instead of starting a session; the trigger then deletes itself. --persona-id and --model must be the session's.
-    #[arg(long)]
-    session_id: Option<String>,
     /// The prompt, with `{{field}}` placeholders filled from the event, such as `Review {{pull_request.html_url}}`.
     #[arg(long, required_unless_present_any = ["prompt_file", "file"], conflicts_with = "prompt_file")]
     prompt: Option<String>,
