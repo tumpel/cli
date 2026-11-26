@@ -302,3 +302,34 @@ async fn trigger_list_prints_check_suite_and_pull_request_review_triggers_withou
     let stdout = http(&["trigger", "list"], "GET /v1/triggers HTTP/1.1", &body, 0, false).await;
     assert_eq!(serde_json::from_str::<Value>(&stdout).unwrap(), body);
 }
+
+#[tokio::test]
+async fn trigger_create_refuses_a_file_with_a_target_before_sending_anything() {
+    let (endpoint, served) = support::serve(vec![]).await;
+    let directory = tempfile::tempdir().unwrap();
+    let credentials = directory.path().join("env");
+    std::fs::write(&credentials, "TUMPEL_TOKEN=scenario-credential\n").unwrap();
+    std::fs::write(
+        directory.path().join("trigger.json"),
+        json!({"name": "wake-status", "personaId": ID, "model": "test-model", "prompt": "Read {{sha}}",
+               "sessionId": OTHER_ID, "source": {"kind": "GitHub", "event": "status", "conditions": []}})
+        .to_string(),
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_tumpel"))
+        .env_clear()
+        .env("TUMPEL_ENDPOINT", &endpoint)
+        .env("TUMPEL_ENV_FILE", credentials)
+        .current_dir(directory.path())
+        .args(["trigger", "create", "--file", "trigger.json"])
+        .output()
+        .await
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        String::from_utf8(output.stderr).unwrap(),
+        "tumpel: this CLI doesn't create session-targeted triggers yet, so remove sessionId from the file\n"
+    );
+    assert!(output.stdout.is_empty());
+    assert!(served.await.unwrap().is_empty());
+}
