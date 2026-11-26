@@ -19,8 +19,13 @@ pub async fn serve(answers: Vec<String>) -> (String, tokio::task::JoinHandle<Vec
                 .unwrap_or("0")
                 .parse()
                 .unwrap();
-            stream.read_exact(&mut vec![0; length]).await.unwrap();
-            lines.push(head.lines().next().unwrap().to_string());
+            let mut body = vec![0; length];
+            stream.read_exact(&mut body).await.unwrap();
+            let line = head.lines().next().unwrap();
+            lines.push(match String::from_utf8(body).unwrap() {
+                body if body.is_empty() => line.to_string(),
+                body => format!("{line} {body}"),
+            });
             stream.write_all(answer.as_bytes()).await.unwrap();
         }
         lines
