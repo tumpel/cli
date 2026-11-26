@@ -194,7 +194,7 @@ async fn host_get_prints_a_future_presence() {
 async fn config_plan_prints_the_description_of_a_future_action() {
     let stdout = http(
         &["config", "plan", "tenant.json"],
-        "POST /v1/tenant-config/plan HTTP/1.1",
+        r#"POST /v1/tenant-config/plan HTTP/1.1 {"config":{"harnessPins":[],"hosts":[],"personas":[],"secretSets":[]},"expiryValues":[],"files":[],"secretValues":[]}"#,
         &json!({"changes": [
             {"action": "Update", "resource": "Persona", "name": "Build", "description": "Update Build"},
             {"action": "FutureAction", "resource": "Persona", "name": "Review", "description": "Migrate Review"}
